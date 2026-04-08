@@ -18,7 +18,7 @@ private let cornerRadiusInsets = (
 
 struct NotchView: View {
     @ObservedObject var viewModel: NotchViewModel
-    @StateObject private var sessionMonitor = ClaudeSessionMonitor()
+    @StateObject private var sessionMonitor = SessionMonitor()
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
@@ -40,12 +40,12 @@ struct NotchView: View {
 
     /// Whether any Claude session is currently processing or compacting
     private var isAnyProcessing: Bool {
-        sessionMonitor.instances.contains { $0.phase == .processing || $0.phase == .compacting }
+        visibleInstances.contains { $0.phase == .processing || $0.phase == .compacting }
     }
 
     /// Whether any Claude session has a pending permission request
     private var hasPendingPermission: Bool {
-        sessionMonitor.instances.contains { $0.phase.isWaitingForApproval }
+        visibleInstances.contains { $0.phase.isWaitingForApproval }
     }
 
     /// Whether any Claude session is waiting for user input (done/ready state) within the display window
@@ -53,7 +53,7 @@ struct NotchView: View {
         let now = Date()
         let displayDuration: TimeInterval = 30  // Show checkmark for 30 seconds
 
-        return sessionMonitor.instances.contains { session in
+        return visibleInstances.contains { session in
             guard session.phase == .waitingForInput else { return false }
             // Only show if within the 30-second display window
             if let enteredAt = waitingForInputTimestamps[session.stableId] {
@@ -70,14 +70,31 @@ struct NotchView: View {
 
     /// Whether there are any active (non-ended) sessions
     private var hasActiveSessions: Bool {
-        sessionMonitor.instances.contains { $0.phase != .ended }
+        visibleInstances.contains { $0.phase != .ended }
+    }
+
+    private var visibleInstances: [SessionState] {
+        sessionMonitor.instances.filter { session in
+            guard !session.isAmbiguousShadowed, !session.isArchivedForDefaultList else {
+                return false
+            }
+
+            switch session.phase {
+            case .waitingForApproval, .waitingForInput:
+                return true
+            case .processing, .compacting:
+                return Date().timeIntervalSince(session.lastActivity) <= 300
+            case .idle, .ended:
+                return false
+            }
+        }
     }
 
     /// The most urgent animation state across all active sessions.
     /// Priority: needsYou > error > working > thinking > done > idle
     private var mostUrgentAnimationState: AnimationState {
         var best: AnimationState = .idle
-        for session in sessionMonitor.instances {
+        for session in visibleInstances {
             let state = session.phase.animationState
             if animationPriority(state) > animationPriority(best) {
                 best = state
@@ -100,7 +117,7 @@ struct NotchView: View {
 
     /// The highest-priority session: urgent states first, then most recently active
     private var highestPrioritySession: SessionState? {
-        sessionMonitor.instances
+        visibleInstances
             .filter { $0.phase != .ended }
             .max { a, b in
                 let pa = animationPriority(a.phase.animationState)
@@ -296,8 +313,8 @@ struct NotchView: View {
                             autoCollapseTimer = nil
                         } else if autoCollapseOnMouseLeave && viewModel.status == .opened {
                             // Mouse left: start 1.5s countdown unless waiting for approval or question
-                            let hasApprovalPending = sessionMonitor.instances.contains { $0.phase.isWaitingForApproval }
-                            let hasQuestionPending = sessionMonitor.instances.contains { $0.phase.isWaitingForQuestion }
+                            let hasApprovalPending = visibleInstances.contains { $0.phase.isWaitingForApproval }
+                            let hasQuestionPending = visibleInstances.contains { $0.phase.isWaitingForQuestion }
                             if !hasApprovalPending && !hasQuestionPending {
                                 let workItem = DispatchWorkItem { [self] in
                                     if !isHovering && viewModel.status == .opened {
@@ -396,7 +413,7 @@ struct NotchView: View {
             } else if hasActiveSessions {
                 // Closed with sessions: Dynamic Island style content
                 CollapsedNotchContent(
-                    sessions: sessionMonitor.instances,
+                    sessions: visibleInstances,
                     mostUrgentState: mostUrgentAnimationState,
                     activityTextParts: activityTextParts,
                     notchHeight: closedNotchSize.height,
@@ -628,7 +645,7 @@ struct NotchView: View {
                 let completedSession = sessionsFromWorkingState[0]
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [self] in
                     guard viewModel.status == .closed else { return }
-                    guard sessionMonitor.instances.contains(where: {
+                    guard visibleInstances.contains(where: {
                         $0.stableId == completedSession.stableId && $0.phase == .waitingForInput
                     }) else { return }
 
@@ -642,7 +659,7 @@ struct NotchView: View {
 
                     DebugLogger.log("Suppress", "Opening notification popup")
                     viewModel.notchOpen(reason: .notification)
-                    if let currentSession = sessionMonitor.instances.first(where: {
+                    if let currentSession = visibleInstances.first(where: {
                         $0.stableId == completedSession.stableId
                     }) {
                         viewModel.showChat(for: currentSession)
@@ -838,6 +855,14 @@ struct CollapsedNotchContent: View {
         sessions.filter { $0.phase != .ended }.count
     }
 
+    private var agentAbbreviations: String {
+        let agents = sessions
+            .filter { $0.phase != .ended }
+            .map(\.agentType)
+        let unique = Array(Set(agents)).sorted { $0.rawValue < $1.rawValue }
+        return unique.map(\.compactAbbreviation).joined()
+    }
+
     @State private var pulsePhase: Bool = false
     @ObservedObject private var buddyReader = BuddyReader.shared
     @AppStorage("usePixelCat") private var usePixelCat: Bool = false
@@ -965,7 +990,7 @@ struct CollapsedNotchContent: View {
                 }
 
                 if activeSessionCount > 0 {
-                    Text("\u{00D7}\(activeSessionCount)")
+                    Text("\(agentAbbreviations)\u{00D7}\(activeSessionCount)")
                         .notchFont(13, weight: .medium, design: .monospaced)
                         .foregroundColor(badgeColor)
                 }

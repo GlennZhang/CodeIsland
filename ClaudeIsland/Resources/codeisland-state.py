@@ -11,6 +11,7 @@ import sys
 
 SOCKET_PATH = "/tmp/codeisland.sock"
 TIMEOUT_SECONDS = 300  # 5 minutes for permission decisions
+AGENT_TYPE = "claude"
 
 
 def get_tty():
@@ -143,6 +144,7 @@ def main():
         "event": event,
         "pid": claude_pid,
         "tty": tty,
+        "agent_type": AGENT_TYPE,
     }
 
     # Capture cmux identity from our own environment.

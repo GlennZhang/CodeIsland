@@ -51,6 +51,21 @@ enum SessionEvent: Sendable {
     /// User interrupted Claude (detected via JSONL)
     case interruptDetected(sessionId: String)
 
+    // MARK: - Process Discovery Events
+
+    /// Process scanning found a running AI agent session.
+    case processDiscovered(
+        pid: Int,
+        agentType: AgentType,
+        cwd: String?,
+        tty: String?,
+        terminalApp: String?,
+        isInTmux: Bool
+    )
+
+    /// A previously discovered process is no longer running.
+    case processTerminated(pid: Int)
+
     // MARK: - Subagent Events (Task tool tracking)
 
     /// A Task (subagent) tool has started
@@ -74,6 +89,9 @@ enum SessionEvent: Sendable {
     case clearDetected(sessionId: String)
 
     // MARK: - Session Lifecycle
+
+    /// User archived a session from the UI.
+    case archiveSession(sessionId: String)
 
     /// Session has ended
     case sessionEnded(sessionId: String)
@@ -240,8 +258,14 @@ extension SessionEvent: CustomStringConvertible {
             return "fileUpdated(session: \(payload.sessionId.prefix(8)), messages: \(payload.messages.count))"
         case .interruptDetected(let sessionId):
             return "interruptDetected(session: \(sessionId.prefix(8)))"
+        case .processDiscovered(let pid, let agentType, _, _, _, _):
+            return "processDiscovered(pid: \(pid), agent: \(agentType.rawValue))"
+        case .processTerminated(let pid):
+            return "processTerminated(pid: \(pid))"
         case .clearDetected(let sessionId):
             return "clearDetected(session: \(sessionId.prefix(8)))"
+        case .archiveSession(let sessionId):
+            return "archiveSession(session: \(sessionId.prefix(8)))"
         case .sessionEnded(let sessionId):
             return "sessionEnded(session: \(sessionId.prefix(8)))"
         case .loadHistory(let sessionId, _):

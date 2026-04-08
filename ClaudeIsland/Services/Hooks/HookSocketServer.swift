@@ -36,6 +36,11 @@ struct HookEvent: Codable, Sendable {
     /// vars from `ps -E`.
     let cmuxWorkspaceId: String?
     let cmuxSurfaceId: String?
+    let agentType: AgentType?
+
+    var resolvedAgentType: AgentType {
+        agentType ?? .claude
+    }
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -48,10 +53,11 @@ struct HookEvent: Codable, Sendable {
         case terminalApp = "terminal_app"
         case cmuxWorkspaceId = "cmux_workspace_id"
         case cmuxSurfaceId = "cmux_surface_id"
+        case agentType = "agent_type"
     }
 
     /// Create a copy with updated toolUseId
-    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, source: String? = nil, transcriptPath: String? = nil, terminalApp: String? = nil, cmuxWorkspaceId: String? = nil, cmuxSurfaceId: String? = nil) {
+    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, source: String? = nil, transcriptPath: String? = nil, terminalApp: String? = nil, cmuxWorkspaceId: String? = nil, cmuxSurfaceId: String? = nil, agentType: AgentType? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.event = event
@@ -68,6 +74,7 @@ struct HookEvent: Codable, Sendable {
         self.terminalApp = terminalApp
         self.cmuxWorkspaceId = cmuxWorkspaceId
         self.cmuxSurfaceId = cmuxSurfaceId
+        self.agentType = agentType
     }
 
     var sessionPhase: SessionPhase {
@@ -98,7 +105,8 @@ struct HookEvent: Codable, Sendable {
 
     /// Whether this event expects a response (permission request)
     nonisolated var expectsResponse: Bool {
-        event == "PermissionRequest" && status == "waiting_for_approval"
+        (event == "PermissionRequest" && status == "waiting_for_approval") ||
+        (resolvedAgentType == .codex && event == "PreToolUse" && status == "waiting_for_approval")
     }
 }
 
@@ -134,6 +142,9 @@ class HookSocketServer {
     private var eventHandler: HookEventHandler?
     private var permissionFailureHandler: PermissionFailureHandler?
     private let queue = DispatchQueue(label: "com.codeisland.socket", qos: .userInitiated)
+
+    /// Separate concurrent queue for blocking I/O so it doesn't stall permission responses
+    private let ioQueue = DispatchQueue(label: "com.codeisland.socket.io", qos: .userInitiated, attributes: .concurrent)
 
     /// Pending permission requests indexed by toolUseId
     private var pendingPermissions: [String: PendingPermission] = [:]
@@ -323,8 +334,8 @@ class HookSocketServer {
     }
 
     /// Cache tool_use_id from PreToolUse event (FIFO queue per key)
-    private func cacheToolUseId(event: HookEvent) {
-        guard let toolUseId = event.toolUseId else { return }
+    private func cacheToolUseId(event: HookEvent, resolvedToolUseId: String? = nil) {
+        guard let toolUseId = resolvedToolUseId ?? event.toolUseId else { return }
 
         let key = cacheKey(sessionId: event.sessionId, toolName: event.tool, toolInput: event.toolInput)
 
@@ -345,19 +356,38 @@ class HookSocketServer {
         cacheLock.lock()
         defer { cacheLock.unlock() }
 
-        guard var queue = toolUseIdCache[key], !queue.isEmpty else {
+        if var queue = toolUseIdCache[key], !queue.isEmpty {
+            let toolUseId = queue.removeFirst()
+
+            if queue.isEmpty {
+                toolUseIdCache.removeValue(forKey: key)
+            } else {
+                toolUseIdCache[key] = queue
+            }
+
+            logger.debug("Retrieved cached tool_use_id for \(event.sessionId.prefix(8), privacy: .public) tool:\(event.tool ?? "?", privacy: .public) id:\(toolUseId.prefix(12), privacy: .public)")
+            return toolUseId
+        }
+
+        guard event.resolvedAgentType == .codex, let toolName = event.tool else {
             return nil
         }
 
-        let toolUseId = queue.removeFirst()
-
-        if queue.isEmpty {
-            toolUseIdCache.removeValue(forKey: key)
-        } else {
-            toolUseIdCache[key] = queue
+        let fallbackPrefix = "\(event.sessionId):\(toolName):"
+        guard let fallbackKey = toolUseIdCache.keys.first(where: { $0.hasPrefix(fallbackPrefix) }),
+              var fallbackQueue = toolUseIdCache[fallbackKey],
+              !fallbackQueue.isEmpty else {
+            return nil
         }
 
-        logger.debug("Retrieved cached tool_use_id for \(event.sessionId.prefix(8), privacy: .public) tool:\(event.tool ?? "?", privacy: .public) id:\(toolUseId.prefix(12), privacy: .public)")
+        let toolUseId = fallbackQueue.removeFirst()
+        if fallbackQueue.isEmpty {
+            toolUseIdCache.removeValue(forKey: fallbackKey)
+        } else {
+            toolUseIdCache[fallbackKey] = fallbackQueue
+        }
+
+        logger.debug("Resolved fallback cached tool_use_id for \(event.sessionId.prefix(8), privacy: .public) tool:\(toolName, privacy: .public) id:\(toolUseId.prefix(12), privacy: .public)")
         return toolUseId
     }
 
@@ -384,7 +414,10 @@ class HookSocketServer {
         var nosigpipe: Int32 = 1
         setsockopt(clientSocket, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
 
-        handleClient(clientSocket)
+        // Dispatch blocking I/O to concurrent queue to avoid stalling permission responses
+        ioQueue.async { [weak self] in
+            self?.handleClient(clientSocket)
+        }
     }
 
     private func handleClient(_ clientSocket: Int32) {
@@ -433,12 +466,12 @@ class HookSocketServer {
 
         logger.debug("Received: \(event.event, privacy: .public) for \(event.sessionId.prefix(8), privacy: .public)")
 
-        if event.event == "PreToolUse" {
-            cacheToolUseId(event: event)
-        }
-
         if event.event == "SessionEnd" {
             cleanupCache(sessionId: event.sessionId)
+        }
+
+        if event.event == "PreToolUse", let eventToolUseId = event.toolUseId {
+            cacheToolUseId(event: event, resolvedToolUseId: eventToolUseId)
         }
 
         if event.expectsResponse {
@@ -448,10 +481,17 @@ class HookSocketServer {
             } else if let cachedToolUseId = popCachedToolUseId(event: event) {
                 toolUseId = cachedToolUseId
             } else {
-                logger.warning("Permission request missing tool_use_id for \(event.sessionId.prefix(8), privacy: .public) - no cache hit")
-                close(clientSocket)
-                eventHandler?(event)
-                return
+                // Permission hooks can omit tool_use_id. Keep the live socket
+                // and synthesize a response id so the UI can still approve/deny.
+                toolUseId = "\(event.resolvedAgentType.rawValue)-permission-\(UUID().uuidString)"
+                logger.warning("Permission request missing tool_use_id for \(event.sessionId.prefix(8), privacy: .public) - using synthetic id")
+            }
+
+            if event.event == "PreToolUse", event.toolUseId == nil {
+                // Codex PreToolUse does not provide a stable tool_use_id. Cache the
+                // synthetic id so the corresponding PostToolUse can resolve it and
+                // clear the placeholder instead of leaving a ghost approval behind.
+                cacheToolUseId(event: event, resolvedToolUseId: toolUseId)
             }
 
             logger.debug("Permission request - keeping socket open for \(event.sessionId.prefix(8), privacy: .public) tool:\(toolUseId.prefix(12), privacy: .public)")
@@ -467,7 +507,13 @@ class HookSocketServer {
                 toolInput: event.toolInput,
                 toolUseId: toolUseId,
                 notificationType: event.notificationType,
-                message: event.message
+                message: event.message,
+                source: event.source,
+                transcriptPath: event.transcriptPath,
+                terminalApp: event.terminalApp,
+                cmuxWorkspaceId: event.cmuxWorkspaceId,
+                cmuxSurfaceId: event.cmuxSurfaceId,
+                agentType: event.agentType
             )
 
             let pending = PendingPermission(
@@ -483,11 +529,39 @@ class HookSocketServer {
 
             eventHandler?(updatedEvent)
             return
-        } else {
-            close(clientSocket)
         }
 
-        eventHandler?(event)
+        let resolvedEvent: HookEvent
+        if event.event == "PostToolUse",
+           event.toolUseId == nil,
+           let correlatedToolUseId = popCachedToolUseId(event: event) {
+            resolvedEvent = HookEvent(
+                sessionId: event.sessionId,
+                cwd: event.cwd,
+                event: event.event,
+                status: event.status,
+                pid: event.pid,
+                tty: event.tty,
+                tool: event.tool,
+                toolInput: event.toolInput,
+                toolUseId: correlatedToolUseId,
+                notificationType: event.notificationType,
+                message: event.message,
+                source: event.source,
+                transcriptPath: event.transcriptPath,
+                terminalApp: event.terminalApp,
+                cmuxWorkspaceId: event.cmuxWorkspaceId,
+                cmuxSurfaceId: event.cmuxSurfaceId,
+                agentType: event.agentType
+            )
+            logger.debug("Resolved correlated PostToolUse for \(event.sessionId.prefix(8), privacy: .public) tool:\(correlatedToolUseId.prefix(12), privacy: .public)")
+        } else {
+            resolvedEvent = event
+        }
+
+        close(clientSocket)
+
+        eventHandler?(resolvedEvent)
     }
 
     private func sendPermissionResponse(toolUseId: String, decision: String, reason: String?) {

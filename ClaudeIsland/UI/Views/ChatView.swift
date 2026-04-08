@@ -12,7 +12,7 @@ import SwiftUI
 struct ChatView: View {
     let sessionId: String
     let initialSession: SessionState
-    let sessionMonitor: ClaudeSessionMonitor
+    let sessionMonitor: SessionMonitor
     @ObservedObject var viewModel: NotchViewModel
 
     @State private var inputText: String = ""
@@ -28,7 +28,7 @@ struct ChatView: View {
     @FocusState private var isInputFocused: Bool
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
 
-    init(sessionId: String, initialSession: SessionState, sessionMonitor: ClaudeSessionMonitor, viewModel: NotchViewModel) {
+    init(sessionId: String, initialSession: SessionState, sessionMonitor: SessionMonitor, viewModel: NotchViewModel) {
         self.sessionId = sessionId
         self.initialSession = initialSession
         self.sessionMonitor = sessionMonitor
@@ -51,6 +51,10 @@ struct ChatView: View {
     /// Extract the tool name if waiting for approval
     private var approvalTool: String? {
         session.phase.approvalToolName
+    }
+
+    private var supportsPermissionResponse: Bool {
+        session.supportsPermissionResponse
     }
 
     
@@ -79,6 +83,12 @@ struct ChatView: View {
                     if tool == "AskUserQuestion" {
                         // Interactive tools - show prompt to answer in terminal
                         interactivePromptBar
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                removal: .opacity
+                            ))
+                    } else if !supportsPermissionResponse {
+                        terminalPermissionFallbackBar
                             .transition(.asymmetric(
                                 insertion: .opacity.combined(with: .move(edge: .bottom)),
                                 removal: .opacity
@@ -420,7 +430,15 @@ struct ChatView: View {
     /// Bar for interactive tools like AskUserQuestion that need terminal input
     private var interactivePromptBar: some View {
         ChatInteractivePromptBar(
+            agentName: session.agentType.displayName,
             isInTmux: session.isInTmux,
+            onGoToTerminal: { focusTerminal() }
+        )
+    }
+
+    private var terminalPermissionFallbackBar: some View {
+        ChatTerminalPermissionFallbackBar(
+            agentName: session.agentType.displayName,
             onGoToTerminal: { focusTerminal() }
         )
     }
@@ -929,6 +947,7 @@ struct InterruptedMessageView: View {
 
 /// Bar for interactive tools like AskUserQuestion that need terminal input
 struct ChatInteractivePromptBar: View {
+    let agentName: String
     let isInTmux: Bool
     let onGoToTerminal: () -> Void
 
@@ -942,7 +961,7 @@ struct ChatInteractivePromptBar: View {
                 Text(MCPToolFormatter.formatToolName("AskUserQuestion"))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundColor(TerminalColors.amber)
-                Text(L10n.claudeNeedsInput)
+                Text(L10n.agentNeedsInput(agentName))
                     .font(.system(size: 11))
                     .opacity(0.5)
                     .lineLimit(1)
@@ -982,6 +1001,56 @@ struct ChatInteractivePromptBar: View {
             }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.7).delay(0.1)) {
                 showButton = true
+            }
+        }
+    }
+}
+
+struct ChatTerminalPermissionFallbackBar: View {
+    let agentName: String
+    let onGoToTerminal: () -> Void
+
+    @State private var showContent = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.permissionRequest)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(TerminalColors.amber)
+                Text(L10n.answerInTerminal(agentName))
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                onGoToTerminal()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11, weight: .medium))
+                    Text(L10n.terminal)
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .foregroundColor(.black)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(TerminalColors.amber.opacity(0.95))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.2))
+        .opacity(showContent ? 1 : 0)
+        .onAppear {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
+                showContent = true
             }
         }
     }

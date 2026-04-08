@@ -37,11 +37,21 @@ class ChatHistoryManager: ObservableObject {
 
     func loadFromFile(sessionId: String, cwd: String) async {
         guard !loadedSessions.contains(sessionId) else { return }
+        guard let session = await SessionStore.shared.session(for: sessionId),
+              session.agentType == .claude else {
+            loadedSessions.insert(sessionId)
+            return
+        }
         loadedSessions.insert(sessionId)
         await SessionStore.shared.process(.loadHistory(sessionId: sessionId, cwd: cwd))
     }
 
     func syncFromFile(sessionId: String, cwd: String) async {
+        guard let session = await SessionStore.shared.session(for: sessionId),
+              session.agentType == .claude else {
+            return
+        }
+
         let messages = await ConversationParser.shared.parseFullConversation(
             sessionId: sessionId,
             cwd: cwd
@@ -161,12 +171,14 @@ struct ToolCallItem: Equatable, Sendable {
             return ToolStatusDisplay.running(for: name, input: input)
         }
         if status == .waitingForApproval {
-            return ToolStatusDisplay(text: "Waiting for approval...", isRunning: true)
+            let preview = inputPreview
+            let text = preview.isEmpty ? "Waiting for approval..." : "Waiting: \(preview)"
+            return ToolStatusDisplay(text: text, isRunning: true)
         }
         if status == .interrupted {
             return ToolStatusDisplay(text: "Interrupted", isRunning: false)
         }
-        return ToolStatusDisplay.completed(for: name, result: structuredResult)
+        return ToolStatusDisplay.completed(for: name, input: input, result: structuredResult)
     }
 
     // Custom Equatable implementation to handle structuredResult

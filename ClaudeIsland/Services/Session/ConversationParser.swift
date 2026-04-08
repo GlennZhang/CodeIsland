@@ -21,6 +21,7 @@ struct ConversationInfo: Equatable {
 
 actor ConversationParser {
     static let shared = ConversationParser()
+    private static let maxStoredToolTextLength = 16_384
 
     /// Logger for conversation parser (nonisolated static for cross-context access)
     nonisolated static let logger = Logger(subsystem: "com.codeisland", category: "Parser")
@@ -57,9 +58,9 @@ actor ConversationParser {
         let isInterrupted: Bool
 
         init(content: String?, stdout: String?, stderr: String?, isError: Bool) {
-            self.content = content
-            self.stdout = stdout
-            self.stderr = stderr
+            self.content = Self.clampText(content)
+            self.stdout = Self.clampText(stdout)
+            self.stderr = Self.clampText(stderr)
             self.isError = isError
             // Detect if this was an interrupt or rejection (various formats)
             self.isInterrupted = isError && (
@@ -67,6 +68,12 @@ actor ConversationParser {
                 content?.contains("interrupted by user") == true ||
                 content?.contains("user doesn't want to proceed") == true
             )
+        }
+
+        private static func clampText(_ text: String?) -> String? {
+            guard let text else { return nil }
+            guard text.count > ConversationParser.maxStoredToolTextLength else { return text }
+            return String(text.prefix(ConversationParser.maxStoredToolTextLength)) + "\n...[truncated]"
         }
     }
 
@@ -514,6 +521,9 @@ actor ConversationParser {
     /// Reset incremental state for a session (call when reloading)
     func resetState(for sessionId: String) {
         incrementalState.removeValue(forKey: sessionId)
+        cache.keys
+            .filter { $0.hasSuffix("/\(sessionId).jsonl") }
+            .forEach { cache.removeValue(forKey: $0) }
     }
 
     /// Check if a /clear command was detected during the last parse
@@ -1141,4 +1151,3 @@ extension ConversationParser {
         return tools
     }
 }
-

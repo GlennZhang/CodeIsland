@@ -10,7 +10,7 @@ import Combine
 import SwiftUI
 
 struct ClaudeInstancesView: View {
-    @ObservedObject var sessionMonitor: ClaudeSessionMonitor
+    @ObservedObject var sessionMonitor: SessionMonitor
     @ObservedObject var viewModel: NotchViewModel
 
     /// Tracks which project groups are collapsed, keyed by group id (cwd path)
@@ -23,14 +23,14 @@ struct ClaudeInstancesView: View {
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
 
     var body: some View {
-        if sessionMonitor.instances.isEmpty {
+        if sortedInstances.isEmpty {
             emptyState
         } else {
             ZStack(alignment: .bottomTrailing) {
                 VStack(spacing: 0) {
                     // Top bar: session count + settings
                     HStack {
-                        Text("\(sessionMonitor.instances.count) \(L10n.sessions)")
+                        Text("\(displayedInstances.count) \(L10n.sessions)")
                             .notchFont(11)
                             .notchSecondaryForeground()
                         Spacer()
@@ -102,8 +102,9 @@ struct ClaudeInstancesView: View {
                 }
             }
             .onReceive(sessionMonitor.$instances) { instances in
-                viewModel.sessionCount = instances.count
-                viewModel.activeSessionCount = instances.filter {
+                let visible = instances.filter { !$0.isAmbiguousShadowed }
+                viewModel.sessionCount = visible.count
+                viewModel.activeSessionCount = visible.filter {
                     $0.phase != .idle && $0.phase != .ended
                 }.count
             }
@@ -304,7 +305,7 @@ struct ClaudeInstancesView: View {
 
     /// Total minutes across all sessions
     private var totalSessionMinutes: Int {
-        sessionMonitor.instances.reduce(0) { total, session in
+        displayedInstances.reduce(0) { total, session in
             total + Int(Date().timeIntervalSince(session.createdAt) / 60)
         }
     }
@@ -325,11 +326,36 @@ struct ClaudeInstancesView: View {
 
     // MARK: - Instances List
 
+    private var visibleInstances: [SessionState] {
+        sessionMonitor.instances.filter { !$0.isAmbiguousShadowed }
+    }
+
+    private var displayedInstances: [SessionState] {
+        guard !viewModel.isInstancesExpanded else { return sortedInstances }
+        return sortedInstances.filter { shouldShowInCollapsedList($0) }
+    }
+
+    private var hiddenSessionCount: Int {
+        max(sortedInstances.count - displayedInstances.count, 0)
+    }
+
+    private var hasHiddenSessions: Bool {
+        hiddenSessionCount > 0
+    }
+
     /// Priority: active (approval/processing/compacting) > waitingForInput > idle
     /// Secondary sort: by last user message date (stable - doesn't change when agent responds)
     /// Note: approval requests stay in their date-based position to avoid layout shift
     private var sortedInstances: [SessionState] {
-        SessionFilter.filterForDisplay(sessionMonitor.instances)
+        SessionFilter.filterForDisplay(visibleInstances)
+        .filter { session in
+            // Filter out short-lived ended sessions (< 30s, likely from rate limit checks)
+            if session.phase == .ended {
+                let duration = Date().timeIntervalSince(session.createdAt)
+                return duration > 30
+            }
+            return true
+        }
         .sorted { a, b in
             let priorityA = phasePriority(a.phase)
             let priorityB = phasePriority(b.phase)
@@ -356,13 +382,28 @@ struct ClaudeInstancesView: View {
 
     /// Sessions grouped by project (cwd), with per-group sorting preserved
     private var projectGroups: [ProjectGroup] {
-        ProjectGroup.group(sessions: sortedInstances)
+        ProjectGroup.group(sessions: displayedInstances)
+    }
+
+    private func shouldShowInCollapsedList(_ session: SessionState) -> Bool {
+        if session.isArchivedForDefaultList {
+            return false
+        }
+
+        switch session.phase {
+        case .waitingForApproval, .waitingForInput:
+            return true
+        case .processing, .compacting:
+            return Date().timeIntervalSince(session.lastActivity) <= 300
+        case .idle, .ended:
+            return false
+        }
     }
 
     private var flatList: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 0) {
-                ForEach(Array(sortedInstances.enumerated()), id: \.element.id) { index, session in
+                ForEach(Array(displayedInstances.enumerated()), id: \.element.stableId) { index, session in
                     InstanceRow(
                         session: session,
                         onFocus: { focusSession(session) },
@@ -379,7 +420,7 @@ struct ClaudeInstancesView: View {
                     }
 
                     // Gradient divider between rows
-                    if index < sortedInstances.count - 1 {
+                    if index < displayedInstances.count - 1 {
                         LinearGradient(
                             colors: [.clear, .white.opacity(0.06), .clear],
                             startPoint: .leading,
@@ -390,55 +431,7 @@ struct ClaudeInstancesView: View {
                     }
                 }
 
-                // Footer: expand/collapse when >4 sessions, or just count
-                if sortedInstances.count > 4 && !viewModel.isInstancesExpanded {
-                    Button {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            viewModel.isInstancesExpanded = true
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.down")
-                                .notchFont(8)
-                            Text(L10n.showAllSessions(sortedInstances.count))
-                                .notchFont(10)
-                        }
-                        .notchSecondaryForeground()
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(.white.opacity(0.04))
-                        )
-                        .padding(.horizontal, 8)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, 4)
-                    .padding(.bottom, 4)
-                } else if sortedInstances.count > 4 && viewModel.isInstancesExpanded {
-                    Button {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            viewModel.isInstancesExpanded = false
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.up")
-                                .notchFont(8)
-                            Text("收起")
-                                .notchFont(10)
-                        }
-                        .notchSecondaryForeground()
-                        .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 4)
-                } else if sortedInstances.count > 0 {
-                    Text(L10n.showAllSessions(sortedInstances.count))
-                        .notchFont(10)
-                        .opacity(0.2)
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
-                }
+                listFooter
             }
             .padding(.horizontal, 2)
             .padding(.vertical, 2)
@@ -464,7 +457,7 @@ struct ClaudeInstancesView: View {
                     }
 
                     if !collapsedGroups.contains(group.id) {
-                        ForEach(group.sessions) { session in
+                        ForEach(group.sessions, id: \.stableId) { session in
                             InstanceRow(
                                 session: session,
                                 onFocus: { focusSession(session) },
@@ -477,11 +470,65 @@ struct ClaudeInstancesView: View {
                         }
                     }
                 }
+
+                listFooter
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
         }
         .scrollBounceBehavior(.basedOnSize)
+    }
+
+    @ViewBuilder
+    private var listFooter: some View {
+        if (sortedInstances.count > 4 || hasHiddenSessions) && !viewModel.isInstancesExpanded {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    viewModel.isInstancesExpanded = true
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8))
+                    Text(L10n.showAllSessions(sortedInstances.count))
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.white.opacity(0.3))
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.white.opacity(0.04))
+                )
+                .padding(.horizontal, 8)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+            .padding(.bottom, 4)
+        } else if (sortedInstances.count > 4 || hasHiddenSessions) && viewModel.isInstancesExpanded {
+            Button {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    viewModel.isInstancesExpanded = false
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 8))
+                    Text(L10n.collapseSessions)
+                        .font(.system(size: 10))
+                }
+                .foregroundColor(.white.opacity(0.3))
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 4)
+        } else if sortedInstances.count > 0 {
+            Text(L10n.showAllSessions(sortedInstances.count))
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.2))
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+        }
     }
 
     // MARK: - Actions
@@ -504,10 +551,18 @@ struct ClaudeInstancesView: View {
     }
 
     private func approveSession(_ session: SessionState) {
+        guard session.supportsPermissionResponse else {
+            focusSession(session)
+            return
+        }
         sessionMonitor.approvePermission(sessionId: session.sessionId)
     }
 
     private func rejectSession(_ session: SessionState) {
+        guard session.supportsPermissionResponse else {
+            focusSession(session)
+            return
+        }
         sessionMonitor.denyPermission(sessionId: session.sessionId, reason: nil)
     }
 
@@ -546,6 +601,10 @@ struct InstanceRow: View {
         return toolName == "AskUserQuestion"
     }
 
+    private var shouldUseTerminalPermissionFallback: Bool {
+        isWaitingForApproval && !session.supportsPermissionResponse
+    }
+
     /// Duration since session started, formatted as "<Xm" or "Xh"
     private var durationText: String {
         let elapsed = Date().timeIntervalSince(session.createdAt)
@@ -579,6 +638,10 @@ struct InstanceRow: View {
     /// Terminal app name — auto-detected from process tree; falls back to "claude" for plain CLI sessions
     private var terminalTag: String {
         session.terminalApp ?? (session.isInTmux ? "tmux" : "claude")
+    }
+
+    private var discoveredBorderColor: Color {
+        session.agentType.tagColor.opacity(session.isDiscovered ? 0.35 : 0)
     }
 
     /// Accent color based on phase (used for status dot)
@@ -668,7 +731,11 @@ struct InstanceRow: View {
                     }
                     // Status dot overlay
                     Circle()
-                        .fill(accentColor)
+                        .fill(session.isDiscovered ? Color.clear : accentColor)
+                        .overlay {
+                            Circle()
+                                .strokeBorder(accentColor.opacity(session.isDiscovered ? 0.7 : 0), lineWidth: 1)
+                        }
                         .frame(width: isActive ? 6 : 5, height: isActive ? 6 : 5)
                         .shadow(color: accentColor.opacity(0.6), radius: isActive ? 3 : 2)
                         .offset(x: iconSize / 2 - 3, y: iconSize / 2 - 3)
@@ -696,6 +763,28 @@ struct InstanceRow: View {
                                 .padding(.vertical, 2)
                                 .background(
                                     Capsule().fill(Color(red: 0.6, green: 0.8, blue: 1.0).opacity(0.12))
+                                )
+                        }
+
+                        // Agent tag
+                        Text(session.agentType.shortLabel)
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundColor(session.agentType.tagColor)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule().fill(session.agentType.tagColor.opacity(0.12))
+                            )
+
+                        if session.isDiscovered {
+                            Text(L10n.discovered)
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.45))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule()
+                                        .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
                                 )
                         }
 
@@ -766,9 +855,15 @@ struct InstanceRow: View {
                     }
 
                     // AskUserQuestion: show options inline
-                    if isWaitingForApproval, let options = askUserOptions {
+                    if shouldUseTerminalPermissionFallback {
+                        TerminalPermissionFallback(
+                            agentName: session.agentType.shortLabel,
+                            onFocus: onFocus
+                        )
+                        .padding(.top, 2)
+                    } else if isWaitingForApproval, let options = askUserOptions {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(L10n.claudeNeedsInput)
+                            Text(L10n.agentNeedsInput(session.agentType.displayName))
                                 .notchFont(9)
                                 .foregroundColor(TerminalColors.amber.opacity(0.7))
 
@@ -832,7 +927,11 @@ struct InstanceRow: View {
                     RoundedRectangle(cornerRadius: isActive ? 8 : 6)
                         .fill(isActive
                             ? accentColor.opacity(isHovered ? 0.1 : 0.05)
-                            : (isHovered ? Color.white.opacity(0.06) : Color.clear))
+                            : (isHovered ? Color.white.opacity(0.06) : session.isDiscovered ? session.agentType.tagColor.opacity(0.03) : Color.clear))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: isActive ? 8 : 6)
+                                .strokeBorder(discoveredBorderColor, lineWidth: session.isDiscovered ? 0.6 : 0)
+                        )
 
                     // Phase transition flash
                     if phaseFlash {
@@ -1083,7 +1182,7 @@ struct ProjectGroupHeader: View {
                             Capsule()
                                 .fill(Color.white.opacity(0.1))
                         )
-                } else if group.isArchivable {
+                } else if group.isArchived {
                     Text(L10n.archived)
                         .notchFont(11, weight: .medium)
                         .notchSecondaryForeground()
@@ -1170,6 +1269,39 @@ struct InlineApprovalButtons: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.1)) {
                 showAllowButton = true
             }
+        }
+    }
+}
+
+struct TerminalPermissionFallback: View {
+    let agentName: String
+    let onFocus: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(L10n.answerInTerminal(agentName))
+                .font(.system(size: 9))
+                .foregroundColor(TerminalColors.amber.opacity(0.7))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            Button {
+                onFocus()
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 9))
+                    Text(L10n.terminal)
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .foregroundColor(.black.opacity(0.85))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(TerminalColors.amber.opacity(0.9))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
         }
     }
 }

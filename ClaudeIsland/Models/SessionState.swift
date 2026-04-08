@@ -16,6 +16,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
     let sessionId: String
     let cwd: String
     let projectName: String
+    let stableIdentity: String
 
     // MARK: - Instance Metadata
 
@@ -32,6 +33,10 @@ struct SessionState: Equatable, Identifiable, Sendable {
     var cmuxSurfaceId: String?
     /// Codex rollout transcript path (non-nil for Codex sessions)
     var codexTranscriptPath: String?
+    let agentType: AgentType
+    var connectionStatus: ConnectionStatus
+    var isAmbiguousShadowed: Bool
+    var isArchived: Bool
 
     // MARK: - State Machine
 
@@ -80,10 +85,18 @@ struct SessionState: Equatable, Identifiable, Sendable {
         sessionId: String,
         cwd: String,
         projectName: String? = nil,
+        stableIdentity: String? = nil,
         pid: Int? = nil,
         tty: String? = nil,
         isInTmux: Bool = false,
         terminalApp: String? = nil,
+        cmuxWorkspaceId: String? = nil,
+        cmuxSurfaceId: String? = nil,
+        codexTranscriptPath: String? = nil,
+        agentType: AgentType = .claude,
+        connectionStatus: ConnectionStatus = .connected,
+        isAmbiguousShadowed: Bool = false,
+        isArchived: Bool = false,
         phase: SessionPhase = .idle,
         chatItems: [ChatHistoryItem] = [],
         toolTracker: ToolTracker = ToolTracker(),
@@ -99,10 +112,18 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.sessionId = sessionId
         self.cwd = cwd
         self.projectName = projectName ?? URL(fileURLWithPath: cwd).lastPathComponent
+        self.stableIdentity = stableIdentity ?? sessionId
         self.pid = pid
         self.tty = tty
         self.isInTmux = isInTmux
         self.terminalApp = terminalApp
+        self.cmuxWorkspaceId = cmuxWorkspaceId
+        self.cmuxSurfaceId = cmuxSurfaceId
+        self.codexTranscriptPath = codexTranscriptPath
+        self.agentType = agentType
+        self.connectionStatus = connectionStatus
+        self.isAmbiguousShadowed = isAmbiguousShadowed
+        self.isArchived = isArchived
         self.phase = phase
         self.chatItems = chatItems
         self.toolTracker = toolTracker
@@ -117,7 +138,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
 
     /// Whether this session needs user attention
     var needsAttention: Bool {
-        phase.needsAttention
+        guard !isDiscovered else { return false }
+        return phase.needsAttention
     }
 
     /// The active permission context, if any
@@ -132,10 +154,15 @@ struct SessionState: Equatable, Identifiable, Sendable {
 
     /// Stable identity for SwiftUI (combines PID and sessionId for animation stability)
     var stableId: String {
-        if let pid = pid {
-            return "\(pid)-\(sessionId)"
-        }
-        return sessionId
+        stableIdentity
+    }
+
+    var isDiscovered: Bool { connectionStatus.isDiscovered }
+
+    var isArchivedForDefaultList: Bool { isArchived || phase == .ended }
+
+    var supportsPermissionResponse: Bool {
+        AgentRegistry.shared.agent(for: agentType)?.hasPermissionResponse ?? false
     }
 
     /// Display title: summary > latest user message > first user message > project name
@@ -149,6 +176,10 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// - If no firstUserMessage, use projectName.
     /// - If no lastToolName, skip the arrow part.
     var smartSummary: String? {
+        guard agentType == .claude else {
+            return cwd.isEmpty ? agentType.displayName : "\(agentType.displayName) · \(projectName)"
+        }
+
         if let summary = conversationInfo.summary {
             return summary
         }

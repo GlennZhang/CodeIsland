@@ -129,6 +129,14 @@ enum L10n {
     static var sessions: String { tr("sessions", "个会话") }
     static var noSessions: String { tr("No sessions", "暂无会话") }
     static var runClaude: String { tr("Run claude in terminal", "在终端中运行 claude") }
+    static var runAgent: String { tr("Run Claude or Codex in terminal", "在终端中运行 Claude 或 Codex") }
+    static var discovered: String { tr("Discovered", "已发现") }
+    static func agentNeedsInput(_ agentName: String) -> String {
+        tr("\(agentName) needs your input", "\(agentName) 需要你的输入")
+    }
+    static func answerInTerminal(_ agentName: String) -> String {
+        tr("Answer in \(agentName)'s terminal", "在 \(agentName) 的终端中处理")
+    }
     static var needsInput: String { tr("Needs your input", "需要你的输入") }
     static var you: String { tr("You:", "你：") }
     static var working: String { tr("Working...", "工作中...") }
@@ -140,6 +148,7 @@ enum L10n {
     static var active: String { tr("active", "活跃") }
 
     static func showAllSessions(_ count: Int) -> String { tr("Show all \(count) sessions", "显示全部 \(count) 个会话") }
+    static var collapseSessions: String { tr("Collapse", "收起") }
 
     // MARK: - Menu
 

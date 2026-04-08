@@ -307,8 +307,12 @@ struct ToolStatusDisplay {
     }
 
     /// Get completed status text for a tool result
-    static func completed(for toolName: String, result: ToolResultData?) -> ToolStatusDisplay {
+    static func completed(for toolName: String, input: [String: String], result: ToolResultData?) -> ToolStatusDisplay {
         guard let result = result else {
+            if toolName == "Bash", let command = input["command"] {
+                let firstLine = command.components(separatedBy: "\n").first ?? command
+                return ToolStatusDisplay(text: String(firstLine.prefix(60)), isRunning: false)
+            }
             return ToolStatusDisplay(text: "Completed", isRunning: false)
         }
 

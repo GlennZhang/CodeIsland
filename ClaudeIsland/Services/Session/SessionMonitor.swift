@@ -1,5 +1,5 @@
 //
-//  ClaudeSessionMonitor.swift
+//  SessionMonitor.swift
 //  ClaudeIsland
 //
 //  MainActor wrapper around SessionStore for UI binding.
@@ -11,11 +11,17 @@ import Combine
 import Foundation
 
 @MainActor
-class ClaudeSessionMonitor: ObservableObject {
+class SessionMonitor: ObservableObject {
+    private static let staleApprovalTimeout: TimeInterval = 300
+    private static let conversationParseRetryCooldown: TimeInterval = 30
+
     @Published var instances: [SessionState] = []
     @Published var pendingInstances: [SessionState] = []
 
     private var cancellables = Set<AnyCancellable>()
+    private var conversationParseInFlight = Set<String>()
+    private var nextConversationParseAttempt: [String: Date] = [:]
+    private var stalePermissionCleanupInFlight = Set<String>()
 
     init() {
         SessionStore.shared.sessionsPublisher
@@ -37,11 +43,12 @@ class ClaudeSessionMonitor: ObservableObject {
                     await SessionStore.shared.process(.hookReceived(event))
                 }
 
-                if event.sessionPhase == .processing {
+                if event.resolvedAgentType == .claude && event.sessionPhase == .processing {
                     Task { @MainActor in
                         InterruptWatcherManager.shared.startWatching(
                             sessionId: event.sessionId,
-                            cwd: event.cwd
+                            cwd: event.cwd,
+                            agentType: event.resolvedAgentType
                         )
                     }
                 }
@@ -69,11 +76,18 @@ class ClaudeSessionMonitor: ObservableObject {
             }
         )
         Task { await SessionStore.shared.startZombieScan() }
+
+        Task {
+            await SessionDiscoveryService.shared.start()
+        }
     }
 
     func stopMonitoring() {
         HookSocketServer.shared.stop()
         Task { await SessionStore.shared.stopZombieScan() }
+        Task {
+            await SessionDiscoveryService.shared.stop()
+        }
     }
 
     /// Remove all ended sessions from the store
@@ -138,7 +152,7 @@ class ClaudeSessionMonitor: ObservableObject {
     /// Archive (remove) a session from the instances list
     func archiveSession(sessionId: String) {
         Task {
-            await SessionStore.shared.process(.sessionEnded(sessionId: sessionId))
+            await SessionStore.shared.process(.archiveSession(sessionId: sessionId))
         }
     }
 
@@ -148,19 +162,85 @@ class ClaudeSessionMonitor: ObservableObject {
         instances = sessions
         pendingInstances = sessions.filter { $0.needsAttention }
 
-        // Eagerly parse conversationInfo for sessions missing it
-        for session in sessions where session.conversationInfo.firstUserMessage == nil {
+        let currentSessionIds = Set(sessions.map(\.sessionId))
+        conversationParseInFlight = conversationParseInFlight.filter { currentSessionIds.contains($0) }
+        nextConversationParseAttempt = nextConversationParseAttempt.filter { currentSessionIds.contains($0.key) }
+        stalePermissionCleanupInFlight = stalePermissionCleanupInFlight.filter { currentSessionIds.contains($0) }
+
+        for session in sessions {
+            guard let permission = session.activePermission,
+                  session.supportsPermissionResponse else {
+                stalePermissionCleanupInFlight.remove(session.sessionId)
+                continue
+            }
+
+            let hasPending = HookSocketServer.shared.hasPendingPermission(sessionId: session.sessionId)
+            let isExpired = Date().timeIntervalSince(permission.receivedAt) > Self.staleApprovalTimeout
+            guard !hasPending || isExpired else {
+                stalePermissionCleanupInFlight.remove(session.sessionId)
+                continue
+            }
+            guard stalePermissionCleanupInFlight.insert(session.sessionId).inserted else { continue }
+
             Task {
-                let info = await ConversationParser.shared.parse(
-                    sessionId: session.sessionId,
-                    cwd: session.cwd
+                await SessionStore.shared.process(
+                    .permissionSocketFailed(sessionId: session.sessionId, toolUseId: permission.toolUseId)
                 )
-                if info.firstUserMessage != nil {
-                    await SessionStore.shared.updateConversationInfo(
-                        sessionId: session.sessionId,
-                        info: info
-                    )
+                await MainActor.run {
+                    self.stalePermissionCleanupInFlight.remove(session.sessionId)
                 }
+            }
+        }
+
+        for session in sessions where shouldScheduleConversationInfoParse(for: session) {
+            scheduleConversationInfoParse(for: session)
+        }
+    }
+
+    private func shouldScheduleConversationInfoParse(for session: SessionState) -> Bool {
+        guard session.agentType == .claude,
+              !session.isDiscovered,
+              !session.isArchivedForDefaultList,
+              session.conversationInfo.firstUserMessage == nil,
+              !conversationParseInFlight.contains(session.sessionId) else {
+            return false
+        }
+
+        if let retryAfter = nextConversationParseAttempt[session.sessionId],
+           retryAfter > Date() {
+            return false
+        }
+
+        return true
+    }
+
+    private func scheduleConversationInfoParse(for session: SessionState) {
+        let sessionId = session.sessionId
+        let cwd = session.cwd
+        conversationParseInFlight.insert(sessionId)
+
+        Task { [weak self] in
+            let info = await ConversationParser.shared.parse(
+                sessionId: sessionId,
+                cwd: cwd
+            )
+
+            await MainActor.run {
+                guard let self else { return }
+                self.conversationParseInFlight.remove(sessionId)
+                if info.firstUserMessage != nil {
+                    self.nextConversationParseAttempt.removeValue(forKey: sessionId)
+                } else {
+                    self.nextConversationParseAttempt[sessionId] = Date()
+                        .addingTimeInterval(Self.conversationParseRetryCooldown)
+                }
+            }
+
+            if info.firstUserMessage != nil {
+                await SessionStore.shared.updateConversationInfo(
+                    sessionId: sessionId,
+                    info: info
+                )
             }
         }
     }
@@ -177,7 +257,7 @@ class ClaudeSessionMonitor: ObservableObject {
 
 // MARK: - Interrupt Watcher Delegate
 
-extension ClaudeSessionMonitor: JSONLInterruptWatcherDelegate {
+extension SessionMonitor: JSONLInterruptWatcherDelegate {
     nonisolated func didDetectInterrupt(sessionId: String) {
         Task {
             await SessionStore.shared.process(.interruptDetected(sessionId: sessionId))

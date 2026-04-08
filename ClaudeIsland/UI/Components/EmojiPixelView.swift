@@ -3,7 +3,7 @@
 //  ClaudeIsland
 //
 //  Renders any emoji as an animated 16x16 pixel art sprite.
-//  Uses TimelineView(.animation) + Canvas for 60fps programmatic rendering.
+//  Uses TimelineView + Canvas for low-FPS programmatic rendering.
 //
 
 import SwiftUI
@@ -42,6 +42,7 @@ struct EmojiPixelView: View {
 
     private static let gridSize = 16
     private static let P: CGFloat = 3
+    private static let redrawFPS = 8.0
     static let canvasSize: CGFloat = CGFloat(gridSize) * P  // 48
 
     /// 16x16 grid of extracted pixel colors, row-major.
@@ -54,7 +55,7 @@ struct EmojiPixelView: View {
     }
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.periodic(from: .now, by: 1.0 / Self.redrawFPS)) { timeline in
             Canvas { context, size in
                 let elapsed = timeline.date.timeIntervalSinceReferenceDate
                 let frame = Int(elapsed * 60)

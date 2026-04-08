@@ -127,7 +127,7 @@ struct ProcessTreeBuilder: Sendable {
 
     /// Get working directory for a process using lsof
     nonisolated func getWorkingDirectory(forPid pid: Int) -> String? {
-        guard let output = ProcessExecutor.shared.runSyncOrNil("/usr/sbin/lsof", arguments: ["-p", String(pid), "-Fn"]) else {
+        guard let output = ProcessExecutor.shared.runSyncOrNil("/usr/sbin/lsof", arguments: ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]) else {
             return nil
         }
 

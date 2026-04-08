@@ -147,7 +147,15 @@ class AgentFileWatcherManager {
 
     private init() {}
 
-    func startWatching(sessionId: String, taskToolId: String, agentId: String, cwd: String) {
+    func startWatching(
+        sessionId: String,
+        taskToolId: String,
+        agentId: String,
+        cwd: String,
+        agentType: AgentType = .claude
+    ) {
+        guard agentType == .claude else { return }
+
         let key = "\(sessionId)-\(taskToolId)"
         guard watchers[key] == nil else { return }
 

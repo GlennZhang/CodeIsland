@@ -21,6 +21,79 @@ struct NotchMenuView: View {
     /// menu which still uses a dark theme to blend with the notch shell.
     static let brandLime = Color(red: 0xCA/255, green: 0xFF/255, blue: 0x00/255)
 
+    @ObservedObject private var screenSelector = ScreenSelector.shared
+    @ObservedObject private var soundSelector = SoundSelector.shared
+    @AppStorage("showGroupedSessions") private var showGrouped: Bool = false
+    @AppStorage("usePixelCat") private var usePixelCat: Bool = false
+    @AppStorage("smartSuppression") private var smartSuppression: Bool = true
+    @AppStorage("autoCollapseOnMouseLeave") private var autoCollapseOnMouseLeave: Bool = true
+    @AppStorage("usageWarningThreshold") private var usageWarningThreshold: Int = 90
+    @State private var hookStates: [AgentType: HookInstaller.InstallState] = [:]
+    @State private var launchAtLogin: Bool = false
+
+    // MARK: - Compact Toggle
+    private func compactToggle(icon: String, label: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 9))
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(width: 12)
+                Text(label)
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Circle()
+                    .fill(isOn ? TerminalColors.green : Color.white.opacity(0.2))
+                    .frame(width: 5, height: 5)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.04)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func hookToggle(agent: any AgentDescriptor) -> some View {
+        let state = hookStates[agent.type] ?? .missing
+        let available = state != .unavailable
+        let label = "\(agent.type.shortLabel) \(L10n.hooks)"
+        return compactToggle(
+            icon: available ? "arrow.triangle.2.circlepath" : "slash.circle",
+            label: label,
+            isOn: state == .installed
+        ) {
+            guard available else { return }
+            HookInstaller.install(agent: agent)
+            refreshStates()
+        }
+    }
+
+    // MARK: - Section Header
+    private func sectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(.white.opacity(0.25))
+                .textCase(.uppercase)
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    private func refreshStates() {
+        hookStates = Dictionary(
+            uniqueKeysWithValues: AgentRegistry.shared.allAgents.map {
+                ($0.type, HookInstaller.installState(for: $0))
+            }
+        )
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+        screenSelector.refreshScreens()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header: back + quit
@@ -53,10 +126,101 @@ struct NotchMenuView: View {
             .padding(.top, 8)
             .padding(.bottom, 4)
 
-            // All features are now accessible via header icon buttons.
-            // This menu only shows the settings row as a fallback.
-            VStack(spacing: 4) {
-                SystemSettingsRow()
+            // Scrollable settings
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 2) {
+                    // Appearance
+                    sectionHeader(L10n.tr("Appearance", "外观"))
+                    ScreenPickerRow(screenSelector: screenSelector)
+                    SoundPickerRow(soundSelector: soundSelector)
+                    LanguageRow()
+                    ThresholdPickerRow(threshold: $usageWarningThreshold)
+
+                    // Toggle grid — 2 columns
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 4) {
+                        compactToggle(icon: "cat", label: "Pixel Cat", isOn: usePixelCat) { usePixelCat.toggle() }
+                        compactToggle(icon: "folder", label: L10n.groupByProject, isOn: showGrouped) { showGrouped.toggle() }
+                        compactToggle(icon: "eye.slash", label: L10n.smartSuppression, isOn: smartSuppression) { smartSuppression.toggle() }
+                        compactToggle(icon: "rectangle.compress.vertical", label: L10n.autoCollapseOnMouseLeave, isOn: autoCollapseOnMouseLeave) { autoCollapseOnMouseLeave.toggle() }
+                    }
+                    .padding(.horizontal, 4)
+
+                    // System
+                    sectionHeader(L10n.tr("System", "系统"))
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 4) {
+                        compactToggle(icon: "power", label: L10n.launchAtLogin, isOn: launchAtLogin) {
+                            do {
+                                if launchAtLogin {
+                                    try SMAppService.mainApp.unregister()
+                                    launchAtLogin = false
+                                } else {
+                                    try SMAppService.mainApp.register()
+                                    launchAtLogin = true
+                                }
+                            } catch {}
+                        }
+                        ForEach(AgentRegistry.shared.allAgents, id: \.type) { agent in
+                            hookToggle(agent: agent)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+
+                    AccessibilityRow(isEnabled: AXIsProcessTrusted())
+
+                    // Star & Feedback
+                    HStack(spacing: 6) {
+                        Button {
+                            NSWorkspace.shared.open(URL(string: "https://github.com/xmqywx/CodeIsland")!)
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "star.fill").font(.system(size: 9)).foregroundColor(.yellow)
+                                Text("Star").font(.system(size: 10, weight: .medium)).foregroundColor(.white.opacity(0.7))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(Color.yellow.opacity(0.08)).overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.yellow.opacity(0.15), lineWidth: 0.5)))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            NSWorkspace.shared.open(URL(string: "https://github.com/xmqywx/CodeIsland/issues")!)
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "bubble.left").font(.system(size: 9)).foregroundColor(.white.opacity(0.4))
+                                Text(L10n.tr("Feedback", "反馈")).font(.system(size: 10, weight: .medium)).foregroundColor(.white.opacity(0.7))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.top, 6)
+
+                    VersionRow()
+
+                    // WeChat contact
+                    HStack(spacing: 4) {
+                        Text(L10n.tr("WeChat", "微信"))
+                            .font(.system(size: 8))
+                            .foregroundColor(.white.opacity(0.2))
+                        Text("A115939")
+                            .font(.system(size: 8, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.3))
+                            .textSelection(.enabled)
+                    }
+                    .padding(.top, 4)
+
+                    Text(L10n.tr("Actively maintained · Your star keeps us going!\nHave ideas? Tap Feedback — we'd love to hear from you!", "持续更新中 · Star 是我们最大的动力！\n有好的想法？点击反馈告诉我们，期待下个版本见！"))
+                        .font(.system(size: 8))
+                        .foregroundColor(.white.opacity(0.15))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 2)
+                }
+                .padding(.horizontal, 4)
+                .padding(.bottom, 8)
             }
             .padding(.horizontal, 4)
             .padding(.bottom, 8)
@@ -103,7 +267,6 @@ struct PluginMenuRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-    }
 }
 
 // MARK: - Version Row

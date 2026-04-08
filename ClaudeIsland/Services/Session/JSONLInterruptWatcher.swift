@@ -185,7 +185,8 @@ class InterruptWatcherManager {
 
     private init() {}
 
-    func startWatching(sessionId: String, cwd: String) {
+    func startWatching(sessionId: String, cwd: String, agentType: AgentType = .claude) {
+        guard agentType == .claude else { return }
         guard watchers[sessionId] == nil else { return }
 
         let watcher = JSONLInterruptWatcher(sessionId: sessionId, cwd: cwd)

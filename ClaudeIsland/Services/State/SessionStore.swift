@@ -23,6 +23,9 @@ actor SessionStore {
     /// All sessions keyed by sessionId
     private var sessions: [String: SessionState] = [:]
 
+    /// PID to session id secondary index for process/hook reconciliation.
+    private var pidIndex: [Int: String] = [:]
+
     /// Pending file syncs (debounced)
     private var pendingSyncs: [String: Task<Void, Never>] = [:]
 
@@ -87,8 +90,24 @@ actor SessionStore {
         case .interruptDetected(let sessionId):
             await processInterrupt(sessionId: sessionId)
 
+        case .processDiscovered(let pid, let agentType, let cwd, let tty, let terminalApp, let isInTmux):
+            processDiscoveredProcess(
+                pid: pid,
+                agentType: agentType,
+                cwd: cwd,
+                tty: tty,
+                terminalApp: terminalApp,
+                isInTmux: isInTmux
+            )
+
+        case .processTerminated(let pid):
+            await processTerminatedProcess(pid: pid)
+
         case .clearDetected(let sessionId):
             await processClearDetected(sessionId: sessionId)
+
+        case .archiveSession(let sessionId):
+            processArchiveSession(sessionId: sessionId)
 
         case .sessionEnded(let sessionId):
             await processSessionEnd(sessionId: sessionId)
@@ -134,7 +153,7 @@ actor SessionStore {
         publishState()
     }
 
-    /// Update conversationInfo for a session (called from ClaudeSessionMonitor)
+    /// Update conversationInfo for a session (called from SessionMonitor)
     func updateConversationInfo(sessionId: String, info: ConversationInfo) {
         guard var session = sessions[sessionId] else { return }
         session.conversationInfo = info
@@ -146,11 +165,28 @@ actor SessionStore {
 
     private func processHookEvent(_ event: HookEvent) async {
         let sessionId = event.sessionId
-        let isNewSession = sessions[sessionId] == nil
+        let agentType = event.resolvedAgentType
+        let reconciledSession = reconciliationCandidate(for: event)
+        let existingSession = sessions[sessionId]
+        let isNewSession = existingSession == nil && reconciledSession == nil
         DebugLogger.log("Hook", "\(event.event) status=\(event.status) sid=\(sessionId.prefix(8)) new=\(isNewSession)")
-        var session = sessions[sessionId] ?? createSession(from: event)
+        var session = existingSession ?? reconciledSession ?? createSession(from: event)
+        let previousPid = session.pid
+
+        if let reconciledSession,
+           reconciledSession.sessionId != sessionId {
+            sessions.removeValue(forKey: reconciledSession.sessionId)
+            if let reconciledPid = reconciledSession.pid {
+                pidIndex[reconciledPid] = sessionId
+            }
+        }
 
         session.pid = event.pid
+        session.connectionStatus = .connected
+        session.isAmbiguousShadowed = false
+        if let pid = event.pid {
+            pidIndex[pid] = sessionId
+        }
         // Plumb cmux workspace/surface IDs captured by the hook script from its
         // own environment. This is the only reliable source — ps -E doesn't
         // expose env vars for hardened-runtime claude processes.
@@ -192,21 +228,41 @@ actor SessionStore {
         if event.status == "ended" {
             session.phase = .ended
             session.endedAt = Date()
+            session.isArchived = true
             sessions[sessionId] = session
             cancelPendingSync(sessionId: sessionId)
             publishState()
             return
         }
 
-        let newPhase = event.determinePhase()
+        let agent = AgentRegistry.shared.agent(for: agentType)
+        let newPhase = agent?.determinePhase(from: event) ?? event.determinePhase()
 
-        if session.phase.canTransition(to: newPhase) {
+        if shouldResetEphemeralState(
+            agentType: agentType,
+            event: event,
+            session: session,
+            newPhase: newPhase,
+            previousPid: previousPid
+        ) {
+            resetEphemeralAgentState(in: &session, resetCreatedAt: true)
+        }
+
+        if session.phase == .ended && newPhase != .ended {
+            // Ended sessions are hidden from the default list, but hook activity
+            // can revive the same CLI session after the user resumes it.
             session.phase = newPhase
+            session.isArchived = false
+        } else if session.phase.canTransition(to: newPhase) {
+            session.phase = newPhase
+            if newPhase != .ended {
+                session.isArchived = false
+            }
         } else {
             Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
         }
 
-        if event.event == "PermissionRequest", let toolUseId = event.toolUseId {
+        if event.expectsResponse, let toolUseId = event.toolUseId {
             Self.logger.debug("Setting tool \(toolUseId.prefix(12), privacy: .public) status to waitingForApproval")
             updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
         }
@@ -221,8 +277,19 @@ actor SessionStore {
         processToolTracking(event: event, session: &session)
         processSubagentTracking(event: event, session: &session)
 
+        if event.expectsResponse, let toolUseId = event.toolUseId {
+            updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
+            if agentType != .claude {
+                pruneNonClaudePendingApprovals(in: &session, keeping: toolUseId)
+            }
+        }
+
         if event.event == "Stop" {
-            session.subagentState = SubagentState()
+            if agentType == .claude {
+                session.subagentState = SubagentState()
+            } else {
+                sweepOrphanedTools(in: &session)
+            }
         }
 
         // Parse conversationInfo only when needed (not on every event — too expensive for large JSONL)
@@ -235,7 +302,7 @@ actor SessionStore {
                 sessionId: sessionId,
                 cwd: event.cwd
             )
-            if conversationInfo.firstUserMessage != nil {
+            if conversationInfo.firstUserMessage != nil || conversationInfo.lastMessage != nil {
                 session.conversationInfo = conversationInfo
                 DebugLogger.log("Store", "Got: first=\(conversationInfo.firstUserMessage?.prefix(30) ?? "nil")")
             }
@@ -262,8 +329,121 @@ actor SessionStore {
             pid: event.pid,
             tty: event.tty?.replacingOccurrences(of: "/dev/", with: ""),
             isInTmux: false,  // Will be updated
+            agentType: event.resolvedAgentType,
+            connectionStatus: .connected,
             phase: .idle
         )
+    }
+
+    private func reconciliationCandidate(for event: HookEvent) -> SessionState? {
+        if let pid = event.pid,
+           let sessionId = pidIndex[pid],
+           let session = sessions[sessionId],
+           session.connectionStatus == .discovered {
+            return session
+        }
+
+        let candidates = sessions.values.filter {
+            $0.connectionStatus == .discovered &&
+            $0.agentType == event.resolvedAgentType &&
+            $0.cwd == event.cwd
+        }
+
+        if candidates.count == 1 {
+            return candidates[0]
+        }
+
+        if candidates.count > 1 {
+            for candidate in candidates {
+                guard var session = sessions[candidate.sessionId] else { continue }
+                session.isAmbiguousShadowed = true
+                sessions[candidate.sessionId] = session
+            }
+        }
+
+        return nil
+    }
+
+    private func processDiscoveredProcess(
+        pid: Int,
+        agentType: AgentType,
+        cwd: String?,
+        tty: String?,
+        terminalApp: String?,
+        isInTmux: Bool
+    ) {
+        if pidIndex[pid] != nil { return }
+
+        let resolvedCwd = cwd ?? ""
+        let sessionId = "disc-\(UUID().uuidString.prefix(8))"
+        let stableIdentity = "pid-\(pid)-\(UUID().uuidString.prefix(8))"
+
+        let session = SessionState(
+            sessionId: sessionId,
+            cwd: resolvedCwd,
+            projectName: resolvedCwd.isEmpty ? agentType.displayName : URL(fileURLWithPath: resolvedCwd).lastPathComponent,
+            stableIdentity: stableIdentity,
+            pid: pid,
+            tty: tty?.replacingOccurrences(of: "/dev/", with: ""),
+            isInTmux: isInTmux,
+            terminalApp: terminalApp,
+            agentType: agentType,
+            connectionStatus: .discovered,
+            phase: .idle
+        )
+
+        sessions[sessionId] = session
+        pidIndex[pid] = sessionId
+    }
+
+    private func processTerminatedProcess(pid: Int) async {
+        guard let sessionId = pidIndex.removeValue(forKey: pid),
+              let session = sessions[sessionId] else { return }
+
+        let group = (session.agentType, session.cwd)
+
+        if session.connectionStatus == .discovered {
+            sessions.removeValue(forKey: sessionId)
+        } else {
+            var updated = session
+            updated.pid = nil
+            updated.tty = nil
+            updated.phase = .ended
+            updated.isArchived = true
+            // Clear chatItems for non-Claude sessions to prevent stale records
+            // Claude sessions keep items for history reload from JSONL
+            if updated.agentType != .claude {
+                updated.chatItems.removeAll()
+                updated.toolTracker = ToolTracker()
+                updated.subagentState = SubagentState()
+            }
+            sessions[sessionId] = updated
+            cancelPendingSync(sessionId: sessionId)
+            if updated.agentType == .claude {
+                await ConversationParser.shared.resetState(for: sessionId)
+            }
+        }
+
+        releaseAmbiguousShadowIfPossible(agentType: group.0, cwd: group.1)
+    }
+
+    private func releaseAmbiguousShadowIfPossible(agentType: AgentType, cwd: String) {
+        let discovered = sessions.values.filter {
+            $0.agentType == agentType &&
+            $0.cwd == cwd &&
+            $0.connectionStatus == .discovered
+        }
+        let connectedExists = sessions.values.contains {
+            $0.agentType == agentType &&
+            $0.cwd == cwd &&
+            $0.connectionStatus == .connected
+        }
+
+        if discovered.count == 1 && !connectedExists {
+            var session = discovered[0]
+            session.isAmbiguousShadowed = false
+            sessions[session.sessionId] = session
+        }
     }
 
     private func processToolTracking(event: HookEvent, session: inout SessionState) {
@@ -530,6 +710,9 @@ actor SessionStore {
 
         // Update tool status in chat history first
         updateToolStatus(in: &session, toolId: toolUseId, status: .error)
+        if session.agentType != .claude {
+            removeToolItem(in: &session, toolId: toolUseId)
+        }
 
         // Check if there are other tools still waiting for approval
         if let nextPending = findNextPendingTool(in: session, excluding: toolUseId) {
@@ -566,6 +749,9 @@ actor SessionStore {
 
         // Mark the failed tool's status as error
         updateToolStatus(in: &session, toolId: toolUseId, status: .error)
+        if session.agentType != .claude {
+            removeToolItem(in: &session, toolId: toolUseId)
+        }
 
         // Check if there are other tools still waiting for approval
         if let nextPending = findNextPendingTool(in: session, excluding: toolUseId) {
@@ -597,6 +783,7 @@ actor SessionStore {
 
     private func processFileUpdate(_ payload: FileUpdatePayload) async {
         guard var session = sessions[payload.sessionId] else { return }
+        guard session.agentType == .claude else { return }
 
         DebugLogger.log("FileUpdate", "sid=\(payload.sessionId.prefix(8)) msgs=\(payload.messages.count) inc=\(payload.isIncremental)")
 
@@ -904,6 +1091,73 @@ actor SessionStore {
         }
     }
 
+    private func removeToolItem(in session: inout SessionState, toolId: String) {
+        session.chatItems.removeAll { item in
+            guard item.id == toolId else { return false }
+            guard case .toolCall = item.type else { return false }
+            return true
+        }
+    }
+
+    private func pruneNonClaudePendingApprovals(in session: inout SessionState, keeping toolUseId: String) {
+        session.chatItems.removeAll { item in
+            guard case .toolCall(let tool) = item.type else { return false }
+            return tool.status == .waitingForApproval && item.id != toolUseId
+        }
+    }
+
+    private func resetEphemeralAgentState(in session: inout SessionState, resetCreatedAt: Bool) {
+        session.chatItems.removeAll()
+        session.toolTracker = ToolTracker()
+        session.subagentState = SubagentState()
+        if resetCreatedAt {
+            session.createdAt = Date()
+        }
+    }
+
+    private func shouldResetEphemeralState(
+        agentType: AgentType,
+        event: HookEvent,
+        session: SessionState,
+        newPhase: SessionPhase,
+        previousPid: Int?
+    ) -> Bool {
+        guard agentType != .claude else { return false }
+
+        if event.event == "SessionStart" || event.event == "UserPromptSubmit" {
+            return true
+        }
+
+        if session.phase == .ended && newPhase != .ended {
+            return true
+        }
+
+        if let previousPid, let currentPid = event.pid, previousPid != currentPid {
+            return true
+        }
+
+        return false
+    }
+
+    private func sweepOrphanedTools(in session: inout SessionState) {
+        for i in 0..<session.chatItems.count {
+            guard case .toolCall(var tool) = session.chatItems[i].type,
+                  tool.status == .running || tool.status == .waitingForApproval else {
+                continue
+            }
+
+            tool.status = .interrupted
+            session.chatItems[i] = ChatHistoryItem(
+                id: session.chatItems[i].id,
+                type: .toolCall(tool),
+                timestamp: session.chatItems[i].timestamp
+            )
+        }
+
+        session.toolTracker = ToolTracker()
+        session.subagentState = SubagentState()
+    }
+
     // MARK: - Interrupt Processing
 
     private func processInterrupt(sessionId: String) async {
@@ -1019,15 +1273,32 @@ actor SessionStore {
         }
     }
 
+    private func processArchiveSession(sessionId: String) {
+        guard var session = sessions[sessionId] else { return }
+        session.isArchived = true
+        sessions[sessionId] = session
+    }
+
     // MARK: - Session End Processing
 
     private func processSessionEnd(sessionId: String) async {
-        sessions.removeValue(forKey: sessionId)
+        guard var session = sessions[sessionId] else { return }
+        if let pid = session.pid {
+            pidIndex.removeValue(forKey: pid)
+        }
+        session.pid = nil
+        session.tty = nil
+        session.phase = .ended
+        session.isArchived = true
+        sessions[sessionId] = session
         cancelPendingSync(sessionId: sessionId)
         // Clean up watchers and pending permissions (mirrors zombie cleanup)
         Task { @MainActor in
             HookSocketServer.shared.cancelPendingPermissions(sessionId: sessionId)
             InterruptWatcherManager.shared.stopWatching(sessionId: sessionId)
+        }
+        if session.agentType == .claude {
+            await ConversationParser.shared.resetState(for: sessionId)
         }
     }
 
@@ -1060,6 +1331,8 @@ actor SessionStore {
         }
 
         // Claude sessions: parse from JSONL
+        guard sessions[sessionId]?.agentType == .claude else { return }
+
         let messages = await ConversationParser.shared.parseFullConversation(
             sessionId: sessionId,
             cwd: cwd
@@ -1135,6 +1408,8 @@ actor SessionStore {
     // MARK: - File Sync Scheduling
 
     private func scheduleFileSync(sessionId: String, cwd: String) {
+        guard sessions[sessionId]?.agentType == .claude else { return }
+
         // Cancel existing sync
         cancelPendingSync(sessionId: sessionId)
 
@@ -1208,10 +1483,68 @@ actor SessionStore {
         pendingSyncs.removeValue(forKey: sessionId)
     }
 
+    // MARK: - Garbage Collection
+
+    /// Remove archived sessions older than the threshold to prevent unbounded memory growth.
+    /// Called periodically from publishState.
+    private func garbageCollectArchivedSessions() {
+        let cutoff = Date().addingTimeInterval(-600) // 10 minutes
+        let before = sessions.count
+        sessions = sessions.filter { _, session in
+            // Keep active (non-archived) sessions regardless of age
+            guard session.isArchived else { return true }
+            // Keep recently archived sessions
+            return session.lastActivity > cutoff
+        }
+        if sessions.count < before {
+            Self.logger.debug("GC: removed \(before - sessions.count) archived sessions, \(sessions.count) remaining")
+        }
+    }
+
+    /// Expire stale waitingForApproval tool items for non-Claude sessions.
+    /// Codex tools that have been waiting >60s without a response are considered timed out.
+    private func expireStaleApprovals() {
+        let cutoff = Date().addingTimeInterval(-60)
+        for (sessionId, var session) in sessions {
+            guard session.agentType != .claude else { continue }
+            var changed = false
+            for i in 0..<session.chatItems.count {
+                if case .toolCall(var tool) = session.chatItems[i].type,
+                   tool.status == .waitingForApproval,
+                   session.chatItems[i].timestamp < cutoff {
+                    tool.status = .interrupted
+                    session.chatItems[i] = ChatHistoryItem(
+                        id: session.chatItems[i].id,
+                        type: .toolCall(tool),
+                        timestamp: session.chatItems[i].timestamp
+                    )
+                    changed = true
+                }
+            }
+            if changed {
+                // If the session phase is still waitingForApproval, move to idle
+                if case .waitingForApproval = session.phase {
+                    session.phase = .idle
+                }
+                sessions[sessionId] = session
+            }
+        }
+    }
+
+    /// Counter to run GC periodically (every 30 publishes)
+    private var publishCount = 0
+
     // MARK: - State Publishing
 
     private func publishState() {
-        let sortedSessions = Array(sessions.values).sorted { $0.projectName < $1.projectName }
+        publishCount += 1
+        if publishCount % 30 == 0 {
+            garbageCollectArchivedSessions()
+        }
+        // Expire stale waitingForApproval tools for non-Claude sessions (>60s old)
+        expireStaleApprovals()
+        let sortedSessions = Array(sessions.values)
+            .sorted { $0.projectName < $1.projectName }
         sessionsSubject.send(sortedSessions)
     }
 

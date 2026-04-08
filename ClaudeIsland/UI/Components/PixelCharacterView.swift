@@ -3,7 +3,7 @@
 //  ClaudeIsland
 //
 //  Pixel cat face animation engine.
-//  Uses TimelineView(.animation) + Canvas for 60fps programmatic sprite rendering.
+//  Uses TimelineView + Canvas for low-FPS programmatic sprite rendering.
 //  Cat design by user — 13x11 pixel grid.
 //
 
@@ -25,11 +25,12 @@ struct PixelCharacterView: View {
     private static let gridW = 13
     private static let gridH = 11
     private static let P: CGFloat = 4
+    private static let redrawFPS = 8.0
     static let canvasW: CGFloat = CGFloat(gridW) * P
     static let canvasH: CGFloat = CGFloat(gridH) * P
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.periodic(from: .now, by: 1.0 / Self.redrawFPS)) { timeline in
             Canvas { context, size in
                 let elapsed = timeline.date.timeIntervalSinceReferenceDate
                 let frame = Int(elapsed * 60)

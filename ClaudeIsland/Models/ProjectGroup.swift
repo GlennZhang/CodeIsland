@@ -16,8 +16,8 @@ struct ProjectGroup: Identifiable {
         sessions.filter { $0.phase != .idle && $0.phase != .ended }.count
     }
 
-    var isArchivable: Bool {
-        sessions.allSatisfy { $0.phase == .idle || $0.phase == .waitingForInput }
+    var isArchived: Bool {
+        sessions.allSatisfy(\.isArchivedForDefaultList)
     }
 
     /// Groups sessions by their `cwd`, using the last path component as the project name.
