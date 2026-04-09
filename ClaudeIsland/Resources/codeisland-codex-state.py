@@ -18,6 +18,25 @@ AGENT_TYPE = "codex"
 TIMEOUT_SECONDS = 300
 
 
+def is_safe_command(command: str) -> bool:
+    """Check if a command is read-only and doesn't need user approval."""
+    cmd = command.strip()
+    # Remove leading env/var assignments (e.g. "VAR=val cmd ...")
+    while cmd and "=" in cmd.split()[0] and not cmd.startswith("git"):
+        cmd = " ".join(cmd.split()[1:])
+
+    safe_prefixes = [
+        "git diff", "git status", "git log", "git show", "git branch",
+        "git rev-parse", "git config", "git remote", "git tag",
+        "ls ", "cat ", "head ", "tail ", "wc ",
+        "find ", "grep ", "rg ", "ag ", "fd ",
+        "echo ", "pwd", "which ", "type ", "whoami",
+        "test ", "[ ", "[[ ",
+        "python3 -c", "python -c",
+    ]
+    return any(cmd.startswith(p) for p in safe_prefixes)
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -48,17 +67,29 @@ def main():
         state["pid"] = agent_pid
 
     if event == "PreToolUse":
-        # Codex currently supports Bash interception. Approve by exiting with
-        # no output; deny by returning the documented blocking JSON shape.
+        command = (tool_input or {}).get("command", "")
+
+        if is_safe_command(command):
+            # Read-only command: fire-and-forget, don't block Codex
+            state["status"] = "processing"
+            send_event(state)
+            sys.exit(0)
+
+        # Potentially dangerous command: wait for CodeIsland approval
+        state["status"] = "waiting_for_approval"
         response = send_event(state, wait_for_response=True)
-        if response and response.get("decision") == "deny":
+        if response:
+            decision = response.get("decision", "allow")
             output = {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": response.get("reason") or "Denied by user via Vibe Island",
+                    "permissionDecision": decision,
                 }
             }
+            if decision == "deny":
+                output["hookSpecificOutput"]["permissionDecisionReason"] = (
+                    response.get("reason") or "Denied by user via Vibe Island"
+                )
             print(json.dumps(output))
         sys.exit(0)
 

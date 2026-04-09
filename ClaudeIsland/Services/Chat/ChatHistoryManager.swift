@@ -38,7 +38,7 @@ class ChatHistoryManager: ObservableObject {
     func loadFromFile(sessionId: String, cwd: String) async {
         guard !loadedSessions.contains(sessionId) else { return }
         guard let session = await SessionStore.shared.session(for: sessionId),
-              session.agentType == .claude else {
+              session.agentType == .claude || session.agentType == .codex else {
             loadedSessions.insert(sessionId)
             return
         }
@@ -48,17 +48,32 @@ class ChatHistoryManager: ObservableObject {
 
     func syncFromFile(sessionId: String, cwd: String) async {
         guard let session = await SessionStore.shared.session(for: sessionId),
-              session.agentType == .claude else {
+              session.agentType == .claude || session.agentType == .codex else {
             return
         }
 
-        let messages = await ConversationParser.shared.parseFullConversation(
-            sessionId: sessionId,
-            cwd: cwd
-        )
-        let completedTools = await ConversationParser.shared.completedToolIds(for: sessionId)
-        let toolResults = await ConversationParser.shared.toolResults(for: sessionId)
-        let structuredResults = await ConversationParser.shared.structuredResults(for: sessionId)
+        let messages: [ChatMessage]
+        let completedTools: Set<String>
+        let toolResults: [String: ConversationParser.ToolResult]
+        let structuredResults: [String: ToolResultData]
+
+        if session.agentType == .codex {
+            messages = await CodexConversationParser.shared.parseFullConversation(
+                sessionId: sessionId,
+                cwd: cwd
+            )
+            completedTools = await CodexConversationParser.shared.completedToolIds(for: sessionId)
+            toolResults = await CodexConversationParser.shared.toolResults(for: sessionId)
+            structuredResults = [:]
+        } else {
+            messages = await ConversationParser.shared.parseFullConversation(
+                sessionId: sessionId,
+                cwd: cwd
+            )
+            completedTools = await ConversationParser.shared.completedToolIds(for: sessionId)
+            toolResults = await ConversationParser.shared.toolResults(for: sessionId)
+            structuredResults = await ConversationParser.shared.structuredResults(for: sessionId)
+        }
 
         let payload = FileUpdatePayload(
             sessionId: sessionId,
@@ -90,7 +105,7 @@ class ChatHistoryManager: ObservableObject {
             let filteredItems = filterOutSubagentTools(session.chatItems)
             newHistories[session.sessionId] = filteredItems
             newAgentDescriptions[session.sessionId] = session.subagentState.agentDescriptions
-            loadedSessions.insert(session.sessionId)
+            // Don't mark as loaded here — let loadFromFile handle that
         }
         histories = newHistories
         agentDescriptions = newAgentDescriptions

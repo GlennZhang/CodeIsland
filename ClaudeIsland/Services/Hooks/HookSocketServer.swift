@@ -271,6 +271,13 @@ class HookSocketServer {
         return pendingPermissions.values.contains { $0.sessionId == sessionId }
     }
 
+    /// Check if a specific pending permission is still backed by a live hook socket.
+    func hasPendingPermission(toolUseId: String) -> Bool {
+        permissionsLock.lock()
+        defer { permissionsLock.unlock() }
+        return pendingPermissions[toolUseId] != nil
+    }
+
     /// Get the pending permission details for a session (if any)
     func getPendingPermission(sessionId: String) -> (toolName: String?, toolId: String?, toolInput: [String: AnyCodable]?)? {
         permissionsLock.lock()
@@ -595,6 +602,8 @@ class HookSocketServer {
             }
         }
 
+        // Flush write buffer before closing to ensure the peer receives the data
+        shutdown(pending.clientSocket, SHUT_WR)
         close(pending.clientSocket)
     }
 
@@ -639,6 +648,7 @@ class HookSocketServer {
             }
         }
 
+        shutdown(pending.clientSocket, SHUT_WR)
         close(pending.clientSocket)
 
         if !writeSuccess {

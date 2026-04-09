@@ -421,6 +421,8 @@ actor SessionStore {
             cancelPendingSync(sessionId: sessionId)
             if updated.agentType == .claude {
                 await ConversationParser.shared.resetState(for: sessionId)
+            } else if updated.agentType == .codex {
+                await CodexConversationParser.shared.resetState(for: sessionId)
             }
         }
 
@@ -1299,13 +1301,15 @@ actor SessionStore {
         }
         if session.agentType == .claude {
             await ConversationParser.shared.resetState(for: sessionId)
+        } else if session.agentType == .codex {
+            await CodexConversationParser.shared.resetState(for: sessionId)
         }
     }
 
     // MARK: - History Loading
 
     private func loadHistoryFromFile(sessionId: String, cwd: String) async {
-        // Codex sessions: parse rollout JSONL instead of Claude JSONL
+        // Codex sessions with rollout transcript: parse rollout JSONL instead of Claude JSONL
         if let transcriptPath = sessions[sessionId]?.codexTranscriptPath, !transcriptPath.isEmpty {
             let messages = await CodexChatHistoryParser.shared.parse(transcriptPath: transcriptPath)
             let firstUserMsg = messages.first(where: { $0.role == .user })
@@ -1330,22 +1334,42 @@ actor SessionStore {
             return
         }
 
-        // Claude sessions: parse from JSONL
-        guard sessions[sessionId]?.agentType == .claude else { return }
+        let agentType = sessions[sessionId]?.agentType
+        guard agentType == .claude || agentType == .codex else { return }
 
-        let messages = await ConversationParser.shared.parseFullConversation(
-            sessionId: sessionId,
-            cwd: cwd
-        )
-        let completedTools = await ConversationParser.shared.completedToolIds(for: sessionId)
-        let toolResults = await ConversationParser.shared.toolResults(for: sessionId)
-        let structuredResults = await ConversationParser.shared.structuredResults(for: sessionId)
+        let messages: [ChatMessage]
+        let completedTools: Set<String>
+        let toolResults: [String: ConversationParser.ToolResult]
+        let structuredResults: [String: ToolResultData]
+        let conversationInfo: ConversationInfo
 
-        // Also parse conversationInfo (summary, lastMessage, etc.)
-        let conversationInfo = await ConversationParser.shared.parse(
-            sessionId: sessionId,
-            cwd: cwd
-        )
+        if agentType == .codex {
+            // Parse from Codex JSONL
+            messages = await CodexConversationParser.shared.parseFullConversation(
+                sessionId: sessionId,
+                cwd: cwd
+            )
+            completedTools = await CodexConversationParser.shared.completedToolIds(for: sessionId)
+            toolResults = await CodexConversationParser.shared.toolResults(for: sessionId)
+            structuredResults = [:]  // Codex doesn't have structured results yet
+            conversationInfo = await CodexConversationParser.shared.parse(
+                sessionId: sessionId,
+                cwd: cwd
+            )
+        } else {
+            // Parse from Claude JSONL
+            messages = await ConversationParser.shared.parseFullConversation(
+                sessionId: sessionId,
+                cwd: cwd
+            )
+            completedTools = await ConversationParser.shared.completedToolIds(for: sessionId)
+            toolResults = await ConversationParser.shared.toolResults(for: sessionId)
+            structuredResults = await ConversationParser.shared.structuredResults(for: sessionId)
+            conversationInfo = await ConversationParser.shared.parse(
+                sessionId: sessionId,
+                cwd: cwd
+            )
+        }
 
         // Process loaded history
         await process(.historyLoaded(
@@ -1408,7 +1432,8 @@ actor SessionStore {
     // MARK: - File Sync Scheduling
 
     private func scheduleFileSync(sessionId: String, cwd: String) {
-        guard sessions[sessionId]?.agentType == .claude else { return }
+        let agentType = sessions[sessionId]?.agentType
+        guard agentType == .claude || agentType == .codex else { return }
 
         // Cancel existing sync
         cancelPendingSync(sessionId: sessionId)
@@ -1418,31 +1443,53 @@ actor SessionStore {
             try? await Task.sleep(nanoseconds: syncDebounceNs)
             guard !Task.isCancelled else { return }
 
-            // Parse incrementally - only get NEW messages since last call
-            let result = await ConversationParser.shared.parseIncremental(
-                sessionId: sessionId,
-                cwd: cwd
-            )
+            if agentType == .codex {
+                // Parse Codex JSONL incrementally
+                let result = await CodexConversationParser.shared.parseIncremental(
+                    sessionId: sessionId,
+                    cwd: cwd
+                )
 
-            if result.clearDetected {
-                await self?.process(.clearDetected(sessionId: sessionId))
+                guard !result.newMessages.isEmpty else { return }
+
+                let payload = FileUpdatePayload(
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    messages: result.newMessages,
+                    isIncremental: true,
+                    completedToolIds: result.completedToolIds,
+                    toolResults: result.toolResults,
+                    structuredResults: [:]
+                )
+
+                await self?.process(.fileUpdated(payload))
+            } else {
+                // Parse Claude JSONL incrementally
+                let result = await ConversationParser.shared.parseIncremental(
+                    sessionId: sessionId,
+                    cwd: cwd
+                )
+
+                if result.clearDetected {
+                    await self?.process(.clearDetected(sessionId: sessionId))
+                }
+
+                guard !result.newMessages.isEmpty || result.clearDetected else {
+                    return
+                }
+
+                let payload = FileUpdatePayload(
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    messages: result.newMessages,
+                    isIncremental: !result.clearDetected,
+                    completedToolIds: result.completedToolIds,
+                    toolResults: result.toolResults,
+                    structuredResults: result.structuredResults
+                )
+
+                await self?.process(.fileUpdated(payload))
             }
-
-            guard !result.newMessages.isEmpty || result.clearDetected else {
-                return
-            }
-
-            let payload = FileUpdatePayload(
-                sessionId: sessionId,
-                cwd: cwd,
-                messages: result.newMessages,
-                isIncremental: !result.clearDetected,
-                completedToolIds: result.completedToolIds,
-                toolResults: result.toolResults,
-                structuredResults: result.structuredResults
-            )
-
-            await self?.process(.fileUpdated(payload))
         }
     }
 
@@ -1490,14 +1537,15 @@ actor SessionStore {
     private func garbageCollectArchivedSessions() {
         let cutoff = Date().addingTimeInterval(-600) // 10 minutes
         let before = sessions.count
-        sessions = sessions.filter { _, session in
-            // Keep active (non-archived) sessions regardless of age
-            guard session.isArchived else { return true }
-            // Keep recently archived sessions
-            return session.lastActivity > cutoff
+        let keysToRemove = sessions.filter { _, session in
+            session.isArchived && session.lastActivity <= cutoff
+        }.map { $0.key }
+        for key in keysToRemove {
+            sessions.removeValue(forKey: key)
         }
-        if sessions.count < before {
-            Self.logger.debug("GC: removed \(before - sessions.count) archived sessions, \(sessions.count) remaining")
+        let remaining = sessions.count
+        if remaining < before {
+            Self.logger.debug("GC: removed \(before - remaining) archived sessions, \(remaining) remaining")
         }
     }
 
@@ -1567,5 +1615,16 @@ actor SessionStore {
     /// Get all current sessions
     func allSessions() -> [SessionState] {
         Array(sessions.values)
+    }
+
+    /// Find a session that has a pending permission (waitingForApproval phase)
+    /// Used as fallback when the UI references a reconciled/removed session ID
+    func findSessionWithPendingPermission() -> SessionState? {
+        sessions.values.first { session in
+            if case .waitingForApproval = session.phase {
+                return true
+            }
+            return false
+        }
     }
 }

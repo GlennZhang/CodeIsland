@@ -99,26 +99,57 @@ class SessionMonitor: ObservableObject {
 
     func approvePermission(sessionId: String) {
         Task {
-            guard let session = await SessionStore.shared.session(for: sessionId),
-                  let permission = session.activePermission else {
+            // Try the given sessionId first; if not found, search all sessions
+            // for one with a pending permission (handles reconciliation ID changes)
+            var session = await SessionStore.shared.session(for: sessionId)
+            if session == nil {
+                DebugLogger.log("Approval", "Session \(sessionId.prefix(8)) not found, searching all sessions")
+                session = await SessionStore.shared.findSessionWithPendingPermission()
+            }
+            guard let session else {
+                DebugLogger.log("Approval", "No session with pending permission found")
+                return
+            }
+            guard let permission = session.activePermission else {
+                DebugLogger.log("Approval", "No activePermission for \(session.sessionId.prefix(8)) phase=\(session.phase)")
                 return
             }
 
+            guard HookSocketServer.shared.hasPendingPermission(toolUseId: permission.toolUseId) else {
+                DebugLogger.log("Approval", "No pending socket for tool \(permission.toolUseId.prefix(12)) — marking failed")
+                await SessionStore.shared.process(
+                    .permissionSocketFailed(sessionId: session.sessionId, toolUseId: permission.toolUseId)
+                )
+                return
+            }
+
+            DebugLogger.log("Approval", "Sending allow for \(session.sessionId.prefix(8)) tool=\(permission.toolUseId.prefix(12))")
             HookSocketServer.shared.respondToPermission(
                 toolUseId: permission.toolUseId,
                 decision: "allow"
             )
 
             await SessionStore.shared.process(
-                .permissionApproved(sessionId: sessionId, toolUseId: permission.toolUseId)
+                .permissionApproved(sessionId: session.sessionId, toolUseId: permission.toolUseId)
             )
         }
     }
 
     func denyPermission(sessionId: String, reason: String?) {
         Task {
-            guard let session = await SessionStore.shared.session(for: sessionId),
-                  let permission = session.activePermission else {
+            var session = await SessionStore.shared.session(for: sessionId)
+            if session == nil {
+                session = await SessionStore.shared.findSessionWithPendingPermission()
+            }
+            guard let session else { return }
+            guard let permission = session.activePermission else {
+                return
+            }
+
+            guard HookSocketServer.shared.hasPendingPermission(toolUseId: permission.toolUseId) else {
+                await SessionStore.shared.process(
+                    .permissionSocketFailed(sessionId: session.sessionId, toolUseId: permission.toolUseId)
+                )
                 return
             }
 
@@ -129,7 +160,7 @@ class SessionMonitor: ObservableObject {
             )
 
             await SessionStore.shared.process(
-                .permissionDenied(sessionId: sessionId, toolUseId: permission.toolUseId, reason: reason)
+                .permissionDenied(sessionId: session.sessionId, toolUseId: permission.toolUseId, reason: reason)
             )
         }
     }
@@ -165,29 +196,37 @@ class SessionMonitor: ObservableObject {
         let currentSessionIds = Set(sessions.map(\.sessionId))
         conversationParseInFlight = conversationParseInFlight.filter { currentSessionIds.contains($0) }
         nextConversationParseAttempt = nextConversationParseAttempt.filter { currentSessionIds.contains($0.key) }
-        stalePermissionCleanupInFlight = stalePermissionCleanupInFlight.filter { currentSessionIds.contains($0) }
+        let currentPermissionToolIds = Set<String>(
+            sessions.compactMap { session in
+                guard session.supportsPermissionResponse else { return nil }
+                return session.activePermission?.toolUseId
+            }
+        )
+        stalePermissionCleanupInFlight = stalePermissionCleanupInFlight.filter { currentPermissionToolIds.contains($0) }
 
         for session in sessions {
             guard let permission = session.activePermission,
                   session.supportsPermissionResponse else {
-                stalePermissionCleanupInFlight.remove(session.sessionId)
+                if let toolUseId = session.activePermission?.toolUseId {
+                    stalePermissionCleanupInFlight.remove(toolUseId)
+                }
                 continue
             }
 
-            let hasPending = HookSocketServer.shared.hasPendingPermission(sessionId: session.sessionId)
+            let hasPending = HookSocketServer.shared.hasPendingPermission(toolUseId: permission.toolUseId)
             let isExpired = Date().timeIntervalSince(permission.receivedAt) > Self.staleApprovalTimeout
             guard !hasPending || isExpired else {
-                stalePermissionCleanupInFlight.remove(session.sessionId)
+                stalePermissionCleanupInFlight.remove(permission.toolUseId)
                 continue
             }
-            guard stalePermissionCleanupInFlight.insert(session.sessionId).inserted else { continue }
+            guard stalePermissionCleanupInFlight.insert(permission.toolUseId).inserted else { continue }
 
             Task {
                 await SessionStore.shared.process(
                     .permissionSocketFailed(sessionId: session.sessionId, toolUseId: permission.toolUseId)
                 )
                 await MainActor.run {
-                    self.stalePermissionCleanupInFlight.remove(session.sessionId)
+                    self.stalePermissionCleanupInFlight.remove(permission.toolUseId)
                 }
             }
         }

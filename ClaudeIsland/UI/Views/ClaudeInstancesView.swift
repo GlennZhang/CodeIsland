@@ -327,7 +327,7 @@ struct ClaudeInstancesView: View {
     // MARK: - Instances List
 
     private var visibleInstances: [SessionState] {
-        sessionMonitor.instances.filter { !$0.isAmbiguousShadowed }
+        sessionMonitor.instances.filter { !$0.isAmbiguousShadowed && !$0.isArchivedForDefaultList }
     }
 
     private var displayedInstances: [SessionState] {
