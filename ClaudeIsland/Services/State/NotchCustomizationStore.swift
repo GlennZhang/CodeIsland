@@ -126,9 +126,12 @@ final class NotchCustomizationStore: ObservableObject {
         var c = NotchCustomization.default
         let d = UserDefaults.standard
         if d.object(forKey: "usePixelCat") != nil {
-            c.showBuddy = d.bool(forKey: "usePixelCat")
+            if d.bool(forKey: "usePixelCat") {
+                c.mascotStyle = .pixelCat
+            } else {
+                c.mascotStyle = .buddy
+            }
         }
-        // Future legacy keys go here, following the same pattern.
         return c
     }
 

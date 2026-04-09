@@ -1550,23 +1550,26 @@ actor SessionStore {
     }
 
     /// Expire stale waitingForApproval tool items for non-Claude sessions.
-    /// Codex tools that have been waiting >60s without a response are considered timed out.
+    /// Tools whose socket is gone OR have been waiting >15s without a response are expired.
     private func expireStaleApprovals() {
-        let cutoff = Date().addingTimeInterval(-60)
+        let cutoff = Date().addingTimeInterval(-15)
         for (sessionId, var session) in sessions {
             guard session.agentType != .claude else { continue }
             var changed = false
             for i in 0..<session.chatItems.count {
                 if case .toolCall(var tool) = session.chatItems[i].type,
-                   tool.status == .waitingForApproval,
-                   session.chatItems[i].timestamp < cutoff {
-                    tool.status = .interrupted
-                    session.chatItems[i] = ChatHistoryItem(
-                        id: session.chatItems[i].id,
-                        type: .toolCall(tool),
-                        timestamp: session.chatItems[i].timestamp
-                    )
-                    changed = true
+                   tool.status == .waitingForApproval {
+                    let isOld = session.chatItems[i].timestamp < cutoff
+                    let socketGone = !HookSocketServer.shared.hasPendingPermission(toolUseId: session.chatItems[i].id)
+                    if isOld || socketGone {
+                        tool.status = .interrupted
+                        session.chatItems[i] = ChatHistoryItem(
+                            id: session.chatItems[i].id,
+                            type: .toolCall(tool),
+                            timestamp: session.chatItems[i].timestamp
+                        )
+                        changed = true
+                    }
                 }
             }
             if changed {

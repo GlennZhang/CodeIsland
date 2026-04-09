@@ -103,6 +103,20 @@ struct NotchView: View {
         return best
     }
 
+    /// The agent type of the most urgent session (for mascot selection).
+    private var mostUrgentAgentType: AgentType {
+        var bestState: AnimationState = .idle
+        var bestAgent: AgentType = .claude
+        for session in visibleInstances {
+            let state = session.phase.animationState
+            if animationPriority(state) > animationPriority(bestState) {
+                bestState = state
+                bestAgent = session.agentType
+            }
+        }
+        return bestAgent
+    }
+
     /// Priority ordering for animation states (higher = more urgent)
     private func animationPriority(_ state: AnimationState) -> Int {
         switch state {
@@ -415,6 +429,7 @@ struct NotchView: View {
                 CollapsedNotchContent(
                     sessions: visibleInstances,
                     mostUrgentState: mostUrgentAnimationState,
+                    mostUrgentAgentType: mostUrgentAgentType,
                     activityTextParts: activityTextParts,
                     notchHeight: closedNotchSize.height,
                     isBouncing: isBouncing,
@@ -761,6 +776,7 @@ struct AnimatedEllipsis: View {
 struct CollapsedNotchContent: View {
     let sessions: [SessionState]
     let mostUrgentState: AnimationState
+    let mostUrgentAgentType: AgentType
     let activityTextParts: (project: String, status: String)?
     let notchHeight: CGFloat
     let isBouncing: Bool
@@ -865,7 +881,6 @@ struct CollapsedNotchContent: View {
 
     @State private var pulsePhase: Bool = false
     @ObservedObject private var buddyReader = BuddyReader.shared
-    @AppStorage("usePixelCat") private var usePixelCat: Bool = false
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
 
     // MARK: - Unattended Task Alert
@@ -942,24 +957,29 @@ struct CollapsedNotchContent: View {
                 // falls through to pixel cat when Claude Code has no
                 // companion data in ~/.claude.json.
                 if notchStore.customization.showBuddy {
-                    switch notchStore.customization.buddyStyle {
-                    case .pixelCat:
-                        PixelCharacterView(state: mostUrgentState)
-                            .scaleEffect(0.28)
-                            .frame(width: 16, height: 16)
-                            .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: true)
-                    case .emoji:
+                    switch notchStore.customization.mascotStyle {
+                    case .buddy:
                         if let buddy = buddyReader.buddy {
                             EmojiPixelView(emoji: buddy.species.emoji, style: .wave)
                                 .scaleEffect(0.30)
                                 .frame(width: 16, height: 16)
                                 .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: true)
                         } else {
-                            PixelCharacterView(state: mostUrgentState)
+                            MascotRouterView(agentType: mostUrgentAgentType, state: mostUrgentState)
                                 .scaleEffect(0.28)
                                 .frame(width: 16, height: 16)
                                 .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: true)
                         }
+                    case .pixelCat:
+                        PixelCharacterView(state: mostUrgentState)
+                            .scaleEffect(0.28)
+                            .frame(width: 16, height: 16)
+                            .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: true)
+                    case .multiMascot:
+                        MascotRouterView(agentType: mostUrgentAgentType, state: mostUrgentState)
+                            .scaleEffect(0.28)
+                            .frame(width: 16, height: 16)
+                            .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: true)
                     }
                 }
 

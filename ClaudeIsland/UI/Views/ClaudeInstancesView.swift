@@ -19,7 +19,6 @@ struct ClaudeInstancesView: View {
     @AppStorage("showGroupedSessions") private var showGrouped: Bool = false
     @ObservedObject private var buddyReader = BuddyReader.shared
     @State private var showBuddyCard: Bool = false
-    @AppStorage("usePixelCat") private var usePixelCat: Bool = false
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
 
     var body: some View {
@@ -251,18 +250,26 @@ struct ClaudeInstancesView: View {
 
             // Animated pixel cat
             VStack(spacing: 12) {
-                if usePixelCat {
+                switch notchStore.customization.mascotStyle {
+                case .buddy:
+                    if let buddy = buddyReader.buddy {
+                        BuddyASCIIView(buddy: buddy)
+                            .frame(width: 80, height: 55)
+                            .scaleEffect(0.8)
+                            .offset(y: emptyFloat ? -3 : 3)
+                    } else {
+                        MascotRouterView(agentType: .claude, state: .idle)
+                            .scaleEffect(0.8)
+                            .frame(width: 52, height: 44)
+                            .offset(y: emptyFloat ? -3 : 3)
+                    }
+                case .pixelCat:
                     PixelCharacterView(state: .idle)
                         .scaleEffect(0.8)
                         .frame(width: 52, height: 44)
                         .offset(y: emptyFloat ? -3 : 3)
-                } else if let buddy = buddyReader.buddy {
-                    BuddyASCIIView(buddy: buddy)
-                        .frame(width: 80, height: 55)
-                        .scaleEffect(0.8)
-                        .offset(y: emptyFloat ? -3 : 3)
-                } else {
-                    PixelCharacterView(state: .idle)
+                case .multiMascot:
+                    MascotRouterView(agentType: .claude, state: .idle)
                         .scaleEffect(0.8)
                         .frame(width: 52, height: 44)
                         .offset(y: emptyFloat ? -3 : 3)
@@ -664,7 +671,7 @@ struct InstanceRow: View {
     }
 
     @ObservedObject private var buddyReader = BuddyReader.shared
-    @AppStorage("usePixelCat") private var usePixelCat: Bool = false
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
     @State private var phaseFlash = false
     @State private var previousPhase: SessionPhase?
 
@@ -719,14 +726,20 @@ struct InstanceRow: View {
             HStack(alignment: .top, spacing: isActive ? 8 : 6) {
                 // Buddy icon or pixel cat
                 ZStack {
-                    if usePixelCat {
+                    switch notchStore.customization.mascotStyle {
+                    case .buddy:
+                        if let buddy = buddyReader.buddy {
+                            EmojiPixelView(emoji: buddy.species.emoji, style: .rock)
+                                .scaleEffect(iconScale)
+                        } else {
+                            MascotRouterView(agentType: session.agentType, state: animationState)
+                                .scaleEffect(iconScale)
+                        }
+                    case .pixelCat:
                         PixelCharacterView(state: animationState)
                             .scaleEffect(iconScale)
-                    } else if let buddy = buddyReader.buddy {
-                        EmojiPixelView(emoji: buddy.species.emoji, style: .rock)
-                            .scaleEffect(iconScale)
-                    } else {
-                        PixelCharacterView(state: animationState)
+                    case .multiMascot:
+                        MascotRouterView(agentType: session.agentType, state: animationState)
                             .scaleEffect(iconScale)
                     }
                     // Status dot overlay

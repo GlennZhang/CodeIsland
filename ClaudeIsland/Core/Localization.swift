@@ -159,6 +159,10 @@ enum L10n {
     static var notchBuddyPixelCat: String { tr("Cat", "像素猫") }
     static var notchBuddyEmoji: String { tr("Emoji", "Emoji") }
     static var notchBuddyNeon: String { tr("Neon", "霓虹") }
+    static var mascotStyle: String { tr("Mascot Style", "吉祥物风格") }
+    static var mascotStyleBuddy: String { tr("Buddy", "Buddy") }
+    static var mascotStylePixelCat: String { tr("Pixel Cat", "像素猫") }
+    static var mascotStyleMultiMascot: String { tr("Multi Mascot", "多角色") }
     static var launchAtLogin: String { tr("Launch at Login", "开机启动") }
     static var hooks: String { tr("Hooks", "钩子") }
     static var codexSupport: String { tr("Codex Support", "Codex 支持") }

@@ -1005,6 +1005,7 @@ private struct SettingsAccessibilityRow: View {
 private struct AppearanceTab: View {
     @ObservedObject private var screenSelector = ScreenSelector.shared
     @AppStorage("showGroupedSessions") private var showGrouped: Bool = false
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1016,8 +1017,17 @@ private struct AppearanceTab: View {
             // "Pixel Cat Mode" lives inside the Notch section's new
             // three-way Buddy Style picker.
             SettingsCard {
-                TabToggle(icon: "folder", label: L10n.groupByProject, isOn: showGrouped) {
-                    showGrouped.toggle()
+                VStack(alignment: .leading, spacing: 8) {
+                    // Mascot style picker
+                    MascotStylePicker(mascotStyle: notchStore.customization.mascotStyle) { style in
+                        notchStore.update { $0.mascotStyle = style }
+                    }
+
+                    Divider().opacity(0.3)
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        TabToggle(icon: "folder", label: L10n.groupByProject, isOn: showGrouped) { showGrouped.toggle() }
+                    }
                 }
             }
 
@@ -1744,6 +1754,79 @@ private struct LogsTab: View {
 
         if let url = finalURL {
             NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+// MARK: - Mascot Style Picker
+
+private struct MascotStylePicker: View {
+    let mascotStyle: MascotStyle
+    let onSelect: (MascotStyle) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(width: 16)
+                Text(L10n.mascotStyle)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+
+            HStack(spacing: 6) {
+                ForEach(MascotStyle.allCases) { style in
+                    Button {
+                        onSelect(style)
+                    } label: {
+                        let isSelected = mascotStyle == style
+                        HStack(spacing: 10) {
+                            Image(systemName: iconName(style))
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(isSelected ? 0.9 : 0.5))
+                                .frame(width: 16)
+                            Text(labelText(style))
+                                .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                                .foregroundColor(.white.opacity(isSelected ? 0.95 : 0.7))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Spacer(minLength: 0)
+                            Circle()
+                                .fill(isSelected ? Theme.sidebarFill : Color.white.opacity(0.18))
+                                .frame(width: 7, height: 7)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(isSelected ? Theme.sidebarFill.opacity(0.1) : Color.white.opacity(0.03))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(isSelected ? Theme.sidebarFill.opacity(0.25) : Color.white.opacity(0.08), lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func iconName(_ style: MascotStyle) -> String {
+        switch style {
+        case .buddy: return "face.smiling"
+        case .pixelCat: return "cat"
+        case .multiMascot: return "star.2"
+        }
+    }
+
+    private func labelText(_ style: MascotStyle) -> String {
+        switch style {
+        case .buddy: return L10n.mascotStyleBuddy
+        case .pixelCat: return L10n.mascotStylePixelCat
+        case .multiMascot: return L10n.mascotStyleMultiMascot
         }
     }
 }

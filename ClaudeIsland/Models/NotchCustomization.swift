@@ -31,6 +31,7 @@ struct NotchCustomization: Codable, Equatable {
     // Visibility toggles
     var showBuddy: Bool
     var showUsageBar: Bool
+    var mascotStyle: MascotStyle
 
     // Per-screen geometry
     var screenGeometries: [String: ScreenGeometry] = [:]
@@ -48,6 +49,7 @@ struct NotchCustomization: Codable, Equatable {
         buddyStyle: BuddyStyle = .pixelCat,
         showBuddy: Bool = true,
         showUsageBar: Bool = true,
+        mascotStyle: MascotStyle = .buddy,
         hardwareNotchMode: HardwareNotchMode = .auto,
         hoverSpeed: HoverSpeed = .normal
     ) {
@@ -56,6 +58,7 @@ struct NotchCustomization: Codable, Equatable {
         self.buddyStyle = buddyStyle
         self.showBuddy = showBuddy
         self.showUsageBar = showUsageBar
+        self.mascotStyle = mascotStyle
         self.hardwareNotchMode = hardwareNotchMode
         self.hoverSpeed = hoverSpeed
     }
@@ -85,6 +88,7 @@ struct NotchCustomization: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case theme, fontScale, buddyStyle, showBuddy, showUsageBar,
              hardwareNotchMode, hoverSpeed, screenGeometries, defaultGeometry,
+             mascotStyle,
              maxWidth, horizontalOffset // legacy keys for migration
     }
 
@@ -107,6 +111,7 @@ struct NotchCustomization: Codable, Equatable {
         }
         self.showBuddy = try c.decodeIfPresent(Bool.self, forKey: .showBuddy) ?? true
         self.showUsageBar = try c.decodeIfPresent(Bool.self, forKey: .showUsageBar) ?? true
+        self.mascotStyle = try c.decodeIfPresent(MascotStyle.self, forKey: .mascotStyle) ?? .buddy
         self.hardwareNotchMode = try c.decodeIfPresent(HardwareNotchMode.self, forKey: .hardwareNotchMode) ?? .auto
         self.hoverSpeed = try c.decodeIfPresent(HoverSpeed.self, forKey: .hoverSpeed) ?? .normal
         self.screenGeometries = try c.decodeIfPresent([String: ScreenGeometry].self, forKey: .screenGeometries) ?? [:]
@@ -135,6 +140,7 @@ struct NotchCustomization: Codable, Equatable {
         try c.encode(buddyStyle, forKey: .buddyStyle)
         try c.encode(showBuddy, forKey: .showBuddy)
         try c.encode(showUsageBar, forKey: .showUsageBar)
+        try c.encode(mascotStyle, forKey: .mascotStyle)
         try c.encode(hardwareNotchMode, forKey: .hardwareNotchMode)
         try c.encode(hoverSpeed, forKey: .hoverSpeed)
         try c.encode(screenGeometries, forKey: .screenGeometries)
@@ -143,15 +149,15 @@ struct NotchCustomization: Codable, Equatable {
 }
 
 /// Which sprite sits next to the status dot in the notch pill.
-/// - `pixelCat`: the 13×11 hand-painted tabby from `PixelCharacterView`.
-///   Reacts to 6 animation states (idle/working/needsYou/…).
+/// - `pixelCat`: the 13x11 hand-painted tabby from `PixelCharacterView`.
+///   Reacts to 6 animation states (idle/working/needsYou/...).
 /// - `emoji`: Claude Code companion emoji from `~/.claude.json`
-///   (18 species — duck/cat/owl/…). Falls back to `pixelCat` when no
+///   (18 species -- duck/cat/owl/...). Falls back to `pixelCat` when no
 ///   companion data exists.
 ///
 /// NOTE: `neon` was considered (cyberpunk recolor of the pixel cat with
 /// glow + hue wave) but `NeonPixelCatView` is designed for the full-size
-/// loading screen and collapses into a green blob at the notch's 16×16
+/// loading screen and collapses into a green blob at the notch's 16x16
 /// target. Pulled it from the picker rather than ship broken visuals.
 enum BuddyStyle: String, Codable, CaseIterable, Identifiable {
     case pixelCat
@@ -166,7 +172,7 @@ enum BuddyStyle: String, Codable, CaseIterable, Identifiable {
 /// v2 line-up (2026-04-20): reset to `classic` + six themes designed
 /// via Claude Design (island/project/themes.jsx). Older raw values
 /// persisted from the v1 palette ("paper", "cyber", "mint", etc.) fall
-/// back to `.classic` on decode — see NotchCustomization.init(from:).
+/// back to `.classic` on decode -- see NotchCustomization.init(from:).
 enum NotchThemeID: String, Codable, CaseIterable, Identifiable {
     case classic
     case forest
@@ -199,11 +205,26 @@ enum FontScale: String, Codable, CaseIterable {
     }
 }
 
+/// How the mascot/icon is displayed in the notch and session list.
+///
+/// - `buddy`: Show the Claude Code buddy (ASCII art or emoji).
+/// - `pixelCat`: Show the original pixel cat face for all agents.
+/// - `multiMascot`: Show a unique pixel character per agent type
+///   (star for Gemini, gem for Cursor, etc.), falls back to pixel cat
+///   for Claude/Codex/unknown.
+enum MascotStyle: String, Codable, CaseIterable, Identifiable {
+    case buddy
+    case pixelCat
+    case multiMascot
+
+    var id: String { rawValue }
+}
+
 /// How CodeIsland treats the MacBook's physical notch when
 /// computing the panel geometry.
 ///
-/// `auto` — detect via `NSScreen.main?.safeAreaInsets.top > 0`.
-/// `forceVirtual` — ignore any hardware notch and draw a
+/// `auto` -- detect via `NSScreen.main?.safeAreaInsets.top > 0`.
+/// `forceVirtual` -- ignore any hardware notch and draw a
 ///   virtual, user-positionable overlay (useful on external
 ///   displays or when the user prefers a freely-resized notch
 ///   even on a notched Mac).
@@ -214,7 +235,7 @@ enum HardwareNotchMode: String, Codable {
 
 /// How fast the notch expands when the mouse hovers over it.
 enum HoverSpeed: String, Codable, CaseIterable, Identifiable {
-    case instant  // 0s — expand immediately
+    case instant  // 0s -- expand immediately
     case normal   // 1s delay (default)
     case slow     // 2s delay
 

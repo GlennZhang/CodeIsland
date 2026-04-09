@@ -12,7 +12,7 @@ import Foundation
 
 @MainActor
 class SessionMonitor: ObservableObject {
-    private static let staleApprovalTimeout: TimeInterval = 300
+    private static let staleApprovalTimeout: TimeInterval = 30
     private static let conversationParseRetryCooldown: TimeInterval = 30
 
     @Published var instances: [SessionState] = []
