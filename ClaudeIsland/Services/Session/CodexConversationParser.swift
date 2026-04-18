@@ -41,6 +41,7 @@ actor CodexConversationParser {
         var callIdToName: [String: String] = [:]
         var completedToolIds: Set<String> = []
         var toolResults: [String: ConversationParser.ToolResult] = [:]
+        var syntheticMessageIndex: Int = 0
     }
 
     private init() {}
@@ -112,55 +113,35 @@ actor CodexConversationParser {
             indexPathCache = loadIndex(path: indexPath)
         }
 
-        // Find thread name from index
-        let entry = indexPathCache?.entries.first { $0.id == sessionId }
+        // Find the freshest thread title from the session index.
+        let entry = indexPathCache?.entries
+            .filter { $0.id == sessionId }
+            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+            .first
         let threadName = entry?.threadName
 
-        // Parse last message from JSONL
         var lastMessage: String?
         var lastMessageRole: String?
         var firstUserMessage: String?
+        var latestUserMessage: String?
 
-        if let filePath = sessionFilePath(sessionId: sessionId),
-           let content = FileManager.default.contents(atPath: filePath),
-           let text = String(data: content, encoding: .utf8) {
-            let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
-            for line in lines {
-                guard let data = line.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      json["type"] as? String == "response_item",
-                      let payload = json["payload"] as? [String: Any],
-                      payload["type"] as? String == "message" else { continue }
+        let messages = parseFullConversation(sessionId: sessionId, cwd: cwd)
+        for message in messages {
+            let text = message.textContent.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
 
-                let role = payload["role"] as? String
-                if role == "user" {
-                    if let contentArray = payload["content"] as? [[String: Any]] {
-                        for block in contentArray {
-                            if block["type"] as? String == "output_text",
-                               let text = block["text"] as? String {
-                                if firstUserMessage == nil {
-                                    firstUserMessage = String(text.prefix(50))
-                                }
-                                lastMessage = text
-                                lastMessageRole = "user"
-                            }
-                        }
-                    }
-                } else if role == "assistant" {
-                    if let contentArray = payload["content"] as? [[String: Any]] {
-                        for block in contentArray {
-                            if block["type"] as? String == "output_text",
-                               let text = block["text"] as? String {
-                                lastMessage = text
-                                lastMessageRole = "assistant"
-                            }
-                        }
-                    }
+            if message.role == .user {
+                if firstUserMessage == nil {
+                    firstUserMessage = ConversationParser.truncateMessageStatic(text, maxLength: 50)
                 }
+                latestUserMessage = ConversationParser.truncateMessageStatic(text, maxLength: 80)
             }
+
+            lastMessage = text
+            lastMessageRole = message.role == .user ? "user" : "assistant"
         }
 
-        let title = threadName ?? firstUserMessage
+        let title = threadName ?? latestUserMessage ?? firstUserMessage
 
         return ConversationInfo(
             summary: title,
@@ -168,7 +149,7 @@ actor CodexConversationParser {
             lastMessageRole: lastMessageRole,
             lastToolName: nil,
             firstUserMessage: firstUserMessage,
-            latestUserMessage: firstUserMessage,
+            latestUserMessage: latestUserMessage,
             lastUserMessageDate: entry?.updatedAt
         )
     }
@@ -192,7 +173,9 @@ actor CodexConversationParser {
     struct IncrementalParseResult {
         let newMessages: [ChatMessage]
         let allMessages: [ChatMessage]
+        let newCompletedToolIds: Set<String>
         let completedToolIds: Set<String>
+        let newToolResults: [String: ConversationParser.ToolResult]
         let toolResults: [String: ConversationParser.ToolResult]
     }
 
@@ -200,18 +183,23 @@ actor CodexConversationParser {
         guard let filePath = sessionFilePath(sessionId: sessionId) else {
             return IncrementalParseResult(
                 newMessages: [], allMessages: [],
-                completedToolIds: [], toolResults: [:]
+                newCompletedToolIds: [],
+                completedToolIds: [],
+                newToolResults: [:],
+                toolResults: [:]
             )
         }
 
         var state = incrementalState[sessionId] ?? IncrementalState()
-        let newMessages = parseNewLines(filePath: filePath, state: &state)
+        let delta = parseNewLines(filePath: filePath, state: &state)
         incrementalState[sessionId] = state
 
         return IncrementalParseResult(
-            newMessages: newMessages,
+            newMessages: delta.messages,
             allMessages: state.messages,
+            newCompletedToolIds: delta.completedToolIds,
             completedToolIds: state.completedToolIds,
+            newToolResults: delta.toolResults,
             toolResults: state.toolResults
         )
     }
@@ -232,9 +220,15 @@ actor CodexConversationParser {
 
     // MARK: - Internal Parsing
 
-    private func parseNewLines(filePath: String, state: inout IncrementalState) -> [ChatMessage] {
+    private struct IncrementalDelta {
+        var messages: [ChatMessage] = []
+        var completedToolIds: Set<String> = []
+        var toolResults: [String: ConversationParser.ToolResult] = [:]
+    }
+
+    private func parseNewLines(filePath: String, state: inout IncrementalState) -> IncrementalDelta {
         guard let fileHandle = FileHandle(forReadingAtPath: filePath) else {
-            return []
+            return IncrementalDelta()
         }
         defer { try? fileHandle.close() }
 
@@ -242,7 +236,7 @@ actor CodexConversationParser {
         do {
             fileSize = try fileHandle.seekToEnd()
         } catch {
-            return []
+            return IncrementalDelta()
         }
 
         // File was truncated (unlikely for Codex but handle gracefully)
@@ -251,18 +245,18 @@ actor CodexConversationParser {
         }
 
         if fileSize == state.lastFileOffset {
-            return []
+            return IncrementalDelta()
         }
 
         do {
             try fileHandle.seek(toOffset: state.lastFileOffset)
         } catch {
-            return state.messages
+            return IncrementalDelta()
         }
 
         guard let newData = try? fileHandle.readToEnd(),
               let newContent = String(data: newData, encoding: .utf8) else {
-            return state.messages
+            return IncrementalDelta()
         }
 
         // Handle incomplete last line
@@ -277,12 +271,12 @@ actor CodexConversationParser {
                 let incompleteBytes = UInt64(incompletePart.utf8.count)
                 state.lastFileOffset = fileSize - incompleteBytes
             } else {
-                return []
+                return IncrementalDelta()
             }
         }
 
         let lines = adjustedContent.components(separatedBy: "\n")
-        var newMessages: [ChatMessage] = []
+        var delta = IncrementalDelta()
 
         for line in lines where !line.isEmpty {
             guard let lineData = line.data(using: .utf8),
@@ -292,22 +286,27 @@ actor CodexConversationParser {
 
             let eventType = json["type"] as? String
 
-            if eventType == "response_item" {
+            if eventType == "event_msg" {
+                guard let payload = json["payload"] as? [String: Any],
+                      let msg = parseEventMessage(payload, state: &state) else { continue }
+                appendMessage(msg, to: &delta.messages, state: &state)
+            } else if eventType == "response_item" {
                 guard let payload = json["payload"] as? [String: Any] else { continue }
                 let itemType = payload["type"] as? String
 
                 switch itemType {
                 case "message":
-                    if let msg = parseMessage(payload) {
-                        newMessages.append(msg)
-                        state.messages.append(msg)
+                    if let msg = parseMessage(payload, state: &state) {
+                        appendMessage(msg, to: &delta.messages, state: &state)
                     }
 
                 case "function_call":
-                    parseFunctionCall(payload, state: &state)
+                    if let msg = parseFunctionCall(payload, state: &state) {
+                        appendMessage(msg, to: &delta.messages, state: &state)
+                    }
 
                 case "function_call_output":
-                    parseFunctionCallOutput(payload, state: &state)
+                    parseFunctionCallOutput(payload, state: &state, delta: &delta)
 
                 default:
                     break
@@ -319,25 +318,24 @@ actor CodexConversationParser {
             state.lastFileOffset = fileSize
         }
 
-        return newMessages
+        return delta
     }
 
     // MARK: - Message Parsing
 
-    private func parseMessage(_ payload: [String: Any]) -> ChatMessage? {
+    private func parseMessage(_ payload: [String: Any], state: inout IncrementalState) -> ChatMessage? {
         let role = payload["role"] as? String
-        guard let itemId = payload["id"] as? String else { return nil }
-
-        // Only parse user and assistant messages
         guard role == "user" || role == "assistant" else { return nil }
 
+        let itemId = (payload["id"] as? String) ?? nextSyntheticMessageId(prefix: "response", state: &state)
         let timestamp = parseTimestamp(payload["created_at"]) ?? Date()
 
         var blocks: [MessageBlock] = []
 
         if let contentArray = payload["content"] as? [[String: Any]] {
             for block in contentArray {
-                if block["type"] as? String == "output_text",
+                let expectedType = role == "user" ? "input_text" : "output_text"
+                if block["type"] as? String == expectedType,
                    let text = block["text"] as? String {
                     blocks.append(.text(text))
                 }
@@ -356,9 +354,38 @@ actor CodexConversationParser {
         )
     }
 
-    private func parseFunctionCall(_ payload: [String: Any], state: inout IncrementalState) {
+    private func parseEventMessage(_ payload: [String: Any], state: inout IncrementalState) -> ChatMessage? {
+        guard let payloadType = payload["type"] as? String else { return nil }
+
+        let role: ChatRole
+        switch payloadType {
+        case "user_message":
+            role = .user
+        case "agent_message":
+            role = .assistant
+        default:
+            return nil
+        }
+
+        guard let text = payload["message"] as? String,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        let itemId = (payload["id"] as? String) ?? nextSyntheticMessageId(prefix: "event", state: &state)
+        let timestamp = parseTimestamp(payload["created_at"]) ?? Date()
+
+        return ChatMessage(
+            id: itemId,
+            role: role,
+            timestamp: timestamp,
+            content: [.text(text)]
+        )
+    }
+
+    private func parseFunctionCall(_ payload: [String: Any], state: inout IncrementalState) -> ChatMessage? {
         guard let callId = payload["call_id"] as? String,
-              let name = payload["name"] as? String else { return }
+              let name = payload["name"] as? String else { return nil }
 
         state.callIdToName[callId] = name
 
@@ -385,28 +412,52 @@ actor CodexConversationParser {
             state.seenCallIds.insert(callId)
 
             let toolBlock = ToolUseBlock(id: callId, name: name, input: input)
-            let message = ChatMessage(
+            return ChatMessage(
                 id: "tool-\(callId)",
                 role: .assistant,
                 timestamp: timestamp,
                 content: [.toolUse(toolBlock)]
             )
-            state.messages.append(message)
         }
+        return nil
     }
 
-    private func parseFunctionCallOutput(_ payload: [String: Any], state: inout IncrementalState) {
+    private func parseFunctionCallOutput(
+        _ payload: [String: Any],
+        state: inout IncrementalState,
+        delta: inout IncrementalDelta
+    ) {
         guard let callId = payload["call_id"] as? String else { return }
 
         state.completedToolIds.insert(callId)
+        delta.completedToolIds.insert(callId)
 
         let output = payload["output"] as? String
-        state.toolResults[callId] = ConversationParser.ToolResult(
+        let result = ConversationParser.ToolResult(
             content: output,
             stdout: nil,
             stderr: nil,
             isError: false
         )
+        state.toolResults[callId] = result
+        delta.toolResults[callId] = result
+    }
+
+    private func appendMessage(_ message: ChatMessage, to newMessages: inout [ChatMessage], state: inout IncrementalState) {
+        if let last = state.messages.last,
+           last.role == message.role,
+           last.textContent == message.textContent,
+           !last.textContent.isEmpty {
+            return
+        }
+
+        state.messages.append(message)
+        newMessages.append(message)
+    }
+
+    private func nextSyntheticMessageId(prefix: String, state: inout IncrementalState) -> String {
+        defer { state.syntheticMessageIndex += 1 }
+        return "\(prefix)-msg-\(state.syntheticMessageIndex)"
     }
 
     // MARK: - Helpers

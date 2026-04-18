@@ -398,8 +398,10 @@ struct ClaudeInstancesView: View {
         }
 
         switch session.phase {
-        case .waitingForApproval, .waitingForInput:
+        case .waitingForApproval:
             return true
+        case .waitingForInput:
+            return Date().timeIntervalSince(session.lastActivity) <= 300
         case .processing, .compacting:
             return Date().timeIntervalSince(session.lastActivity) <= 300
         case .idle, .ended:

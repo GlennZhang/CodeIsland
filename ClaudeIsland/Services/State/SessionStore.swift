@@ -292,16 +292,24 @@ actor SessionStore {
             }
         }
 
-        // Parse conversationInfo only when needed (not on every event — too expensive for large JSONL)
-        // Skip for Codex sessions — they have no Claude JSONL file
-        if event.source != "codex" &&
-           (session.conversationInfo.firstUserMessage == nil ||
-           (session.phase == .waitingForInput && session.conversationInfo.lastMessage == nil)) {
+        // Refresh conversation metadata only at turn boundaries. Parsing on every
+        // hook event creates repeated full-file JSONL work and can dominate CPU.
+        if (session.agentType == .claude || session.agentType == .codex) &&
+           event.event == "Stop" &&
+           (session.conversationInfo.firstUserMessage == nil || session.conversationInfo.lastMessage == nil) {
             DebugLogger.log("Store", "Parsing conversationInfo for \(sessionId.prefix(8))")
-            let conversationInfo = await ConversationParser.shared.parse(
-                sessionId: sessionId,
-                cwd: event.cwd
-            )
+            let conversationInfo: ConversationInfo
+            if session.agentType == .codex {
+                conversationInfo = await CodexConversationParser.shared.parse(
+                    sessionId: sessionId,
+                    cwd: event.cwd
+                )
+            } else {
+                conversationInfo = await ConversationParser.shared.parse(
+                    sessionId: sessionId,
+                    cwd: event.cwd
+                )
+            }
             if conversationInfo.firstUserMessage != nil || conversationInfo.lastMessage != nil {
                 session.conversationInfo = conversationInfo
                 DebugLogger.log("Store", "Got: first=\(conversationInfo.firstUserMessage?.prefix(30) ?? "nil")")
@@ -785,15 +793,23 @@ actor SessionStore {
 
     private func processFileUpdate(_ payload: FileUpdatePayload) async {
         guard var session = sessions[payload.sessionId] else { return }
-        guard session.agentType == .claude else { return }
+        guard session.agentType == .claude || session.agentType == .codex else { return }
 
         DebugLogger.log("FileUpdate", "sid=\(payload.sessionId.prefix(8)) msgs=\(payload.messages.count) inc=\(payload.isIncremental)")
 
         // Update conversationInfo from JSONL (summary, lastMessage, etc.)
-        let conversationInfo = await ConversationParser.shared.parse(
-            sessionId: payload.sessionId,
-            cwd: session.cwd
-        )
+        let conversationInfo: ConversationInfo
+        if session.agentType == .codex {
+            conversationInfo = await CodexConversationParser.shared.parse(
+                sessionId: payload.sessionId,
+                cwd: session.cwd
+            )
+        } else {
+            conversationInfo = await ConversationParser.shared.parse(
+                sessionId: payload.sessionId,
+                cwd: session.cwd
+            )
+        }
         session.conversationInfo = conversationInfo
 
         // Handle /clear reconciliation - remove items that no longer exist in parser state
@@ -1450,15 +1466,15 @@ actor SessionStore {
                     cwd: cwd
                 )
 
-                guard !result.newMessages.isEmpty else { return }
+                guard !result.newMessages.isEmpty || !result.newCompletedToolIds.isEmpty else { return }
 
                 let payload = FileUpdatePayload(
                     sessionId: sessionId,
                     cwd: cwd,
                     messages: result.newMessages,
                     isIncremental: true,
-                    completedToolIds: result.completedToolIds,
-                    toolResults: result.toolResults,
+                    completedToolIds: result.newCompletedToolIds,
+                    toolResults: result.newToolResults,
                     structuredResults: [:]
                 )
 
@@ -1549,20 +1565,21 @@ actor SessionStore {
         }
     }
 
-    /// Expire stale waitingForApproval tool items for non-Claude sessions.
-    /// Tools whose socket is gone OR have been waiting >15s without a response are expired.
+    /// Expire waitingForApproval tool items for non-Claude sessions when their
+    /// backing hook socket disappears. Long-lived approvals must remain visible
+    /// until the user resolves them.
     private func expireStaleApprovals() {
-        let cutoff = Date().addingTimeInterval(-15)
         for (sessionId, var session) in sessions {
             guard session.agentType != .claude else { continue }
             var changed = false
+            var staleToolIds: [String] = []
             for i in 0..<session.chatItems.count {
                 if case .toolCall(var tool) = session.chatItems[i].type,
                    tool.status == .waitingForApproval {
-                    let isOld = session.chatItems[i].timestamp < cutoff
                     let socketGone = !HookSocketServer.shared.hasPendingPermission(toolUseId: session.chatItems[i].id)
-                    if isOld || socketGone {
+                    if socketGone {
                         tool.status = .interrupted
+                        staleToolIds.append(session.chatItems[i].id)
                         session.chatItems[i] = ChatHistoryItem(
                             id: session.chatItems[i].id,
                             type: .toolCall(tool),
@@ -1573,9 +1590,24 @@ actor SessionStore {
                 }
             }
             if changed {
-                // If the session phase is still waitingForApproval, move to idle
-                if case .waitingForApproval = session.phase {
-                    session.phase = .idle
+                if session.agentType != .claude {
+                    for toolId in staleToolIds {
+                        removeToolItem(in: &session, toolId: toolId)
+                    }
+                }
+
+                if case .waitingForApproval(let ctx) = session.phase,
+                   staleToolIds.contains(ctx.toolUseId) {
+                    if let nextPending = findNextPendingTool(in: session, excluding: ctx.toolUseId) {
+                        session.phase = .waitingForApproval(PermissionContext(
+                            toolUseId: nextPending.id,
+                            toolName: nextPending.name,
+                            toolInput: nil,
+                            receivedAt: nextPending.timestamp
+                        ))
+                    } else {
+                        session.phase = .idle
+                    }
                 }
                 sessions[sessionId] = session
             }
@@ -1592,7 +1624,8 @@ actor SessionStore {
         if publishCount % 30 == 0 {
             garbageCollectArchivedSessions()
         }
-        // Expire stale waitingForApproval tools for non-Claude sessions (>60s old)
+        // Expire waitingForApproval tools for non-Claude sessions only after the
+        // backing hook socket is gone, so blocking approvals can stay open.
         expireStaleApprovals()
         let sortedSessions = Array(sessions.values)
             .sorted { $0.projectName < $1.projectName }

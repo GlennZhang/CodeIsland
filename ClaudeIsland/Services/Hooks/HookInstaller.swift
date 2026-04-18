@@ -42,6 +42,7 @@ struct HookInstaller {
             .appendingPathComponent(".claude")
         let hooksDir = claudeDir.appendingPathComponent("hooks")
         let pythonScript = hooksDir.appendingPathComponent("codeisland-state.py")
+        let bridgeScript = hooksDir.appendingPathComponent("codeisland-bridge")
         let settings = claudeDir.appendingPathComponent("settings.json")
 
         try? FileManager.default.createDirectory(
@@ -58,6 +59,15 @@ struct HookInstaller {
             )
         }
 
+        if let bundledBridge = Bundle.main.url(forResource: "codeisland-bridge", withExtension: nil) {
+            try? FileManager.default.removeItem(at: bridgeScript)
+            try? FileManager.default.copyItem(at: bundledBridge, to: bridgeScript)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: bridgeScript.path
+            )
+        }
+
         updateSettings(at: settings)
     }
 
@@ -66,6 +76,8 @@ struct HookInstaller {
             .appendingPathComponent(".codex")
         let hooksDir = codexDir.appendingPathComponent("hooks")
         let pythonScript = hooksDir.appendingPathComponent("codeisland-codex-state.py")
+        let bridgeScript = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/hooks/codeisland-bridge")
         let config = codexDir.appendingPathComponent("config.toml")
         let hooks = codexDir.appendingPathComponent("hooks.json")
 
@@ -80,6 +92,19 @@ struct HookInstaller {
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],
                 ofItemAtPath: pythonScript.path
+            )
+        }
+
+        if let bundledBridge = Bundle.main.url(forResource: "codeisland-bridge", withExtension: nil) {
+            try? FileManager.default.createDirectory(
+                at: bridgeScript.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? FileManager.default.removeItem(at: bridgeScript)
+            try? FileManager.default.copyItem(at: bundledBridge, to: bridgeScript)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: bridgeScript.path
             )
         }
 
@@ -189,19 +214,17 @@ struct HookInstaller {
             json = existing
         }
 
-        let python = detectPython()
-        let command = "\(python) ~/.codex/hooks/codeisland-codex-state.py"
-        let hookEntry: [[String: Any]] = [["type": "command", "command": command]]
-        let hookEntryWithTimeout: [[String: Any]] = [["type": "command", "command": command, "timeout": 300]]
-        let withMatcher: [[String: Any]] = [["matcher": "*", "hooks": hookEntry]]
-        let bashWithTimeout: [[String: Any]] = [["matcher": "Bash", "hooks": hookEntryWithTimeout]]
-        let withoutMatcher: [[String: Any]] = [["hooks": hookEntry]]
+        let command = codexHookCommand()
+        let defaultHookEntry: [[String: Any]] = [["type": "command", "command": command, "timeout": 10]]
+        let blockingHookEntry: [[String: Any]] = [["type": "command", "command": command, "timeout": 86400]]
+        let withoutMatcher: [[String: Any]] = [["hooks": defaultHookEntry]]
+        let withoutMatcherBlocking: [[String: Any]] = [["hooks": blockingHookEntry]]
         var hooks = json["hooks"] as? [String: Any] ?? [:]
 
         let hookEvents: [(String, [[String: Any]])] = [
             ("UserPromptSubmit", withoutMatcher),
-            ("PreToolUse", bashWithTimeout),
-            ("PostToolUse", withMatcher),
+            ("PreToolUse", withoutMatcherBlocking),
+            ("PostToolUse", withoutMatcher),
             ("SessionStart", withoutMatcher),
             ("Stop", withoutMatcher),
         ]
@@ -210,7 +233,7 @@ struct HookInstaller {
             if var existingEvent = hooks[event] as? [[String: Any]] {
                 existingEvent = upsertingScriptHook(
                     in: existingEvent,
-                    scriptName: "codeisland-codex-state.py",
+                    scriptName: nil,
                     replacement: config
                 )
                 hooks[event] = existingEvent
@@ -225,11 +248,11 @@ struct HookInstaller {
 
     private static func upsertingScriptHook(
         in entries: [[String: Any]],
-        scriptName: String,
+        scriptName: String?,
         replacement: [[String: Any]]
     ) -> [[String: Any]] {
         var updated = entries.filter { entry in
-            !entryContainsScriptHook(entry, scriptName: scriptName)
+            !entryContainsManagedHook(entry, scriptName: scriptName)
         }
         updated.append(contentsOf: replacement)
         return updated
@@ -237,15 +260,15 @@ struct HookInstaller {
 
     private static func hasScriptHook(_ entries: [[String: Any]], scriptName: String) -> Bool {
         entries.contains { entry in
-            entryContainsScriptHook(entry, scriptName: scriptName)
+            entryContainsManagedHook(entry, scriptName: scriptName)
         }
     }
 
-    private static func entryContainsScriptHook(_ entry: [String: Any], scriptName: String) -> Bool {
+    private static func entryContainsManagedHook(_ entry: [String: Any], scriptName: String?) -> Bool {
         if let entryHooks = entry["hooks"] as? [[String: Any]] {
             return entryHooks.contains { h in
                 let cmd = h["command"] as? String ?? ""
-                return cmd.contains(scriptName)
+                return isManagedCodexHookCommand(cmd, scriptName: scriptName)
             }
         }
         return false
@@ -340,11 +363,44 @@ struct HookInstaller {
 
         for (_, value) in hooks {
             if let entries = value as? [[String: Any]],
-               hasScriptHook(entries, scriptName: "codeisland-codex-state.py") {
+               entries.contains(where: { entryContainsManagedHook($0, scriptName: nil) }) {
                 return true
             }
         }
         return false
+    }
+
+    private static func codexHookCommand() -> String {
+        if let bridge = detectCodexBridgePath() {
+            return quoteIfNeeded(bridge) + " --source codex"
+        }
+
+        let python = detectPython()
+        return "\(python) ~/.codex/hooks/codeisland-codex-state.py"
+    }
+
+    private static func detectCodexBridgePath() -> String? {
+        let home = NSHomeDirectory()
+        let candidates = [
+            home + "/.claude/hooks/codeisland-bridge",
+            "/Applications/CodeIsland.app/Contents/Helpers/codeisland-bridge",
+            home + "/Applications/CodeIsland.app/Contents/Helpers/codeisland-bridge",
+        ]
+
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    private static func isManagedCodexHookCommand(_ command: String, scriptName: String?) -> Bool {
+        if let scriptName, !scriptName.isEmpty {
+            return command.contains(scriptName)
+        }
+
+        return command.contains("codeisland-codex-state.py")
+            || command.contains("codeisland-bridge")
+    }
+
+    private static func quoteIfNeeded(_ path: String) -> String {
+        path.contains(" ") ? "\"\(path)\"" : path
     }
 
     /// Uninstall hooks from settings.json and remove script

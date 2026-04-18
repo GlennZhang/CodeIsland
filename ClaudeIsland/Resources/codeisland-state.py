@@ -79,6 +79,10 @@ def detect_terminal_app():
 
 def send_event(state):
     """Send event to app, return response if any"""
+    # Quick check: if the socket file doesn't exist, the app isn't running.
+    # Exit immediately to avoid blocking Claude on a connect timeout.
+    if not os.path.exists(SOCKET_PATH):
+        return None
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(TIMEOUT_SECONDS)

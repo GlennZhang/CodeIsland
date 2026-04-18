@@ -176,10 +176,6 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// - If no firstUserMessage, use projectName.
     /// - If no lastToolName, skip the arrow part.
     var smartSummary: String? {
-        guard agentType == .claude else {
-            return cwd.isEmpty ? agentType.displayName : "\(agentType.displayName) · \(projectName)"
-        }
-
         if let summary = conversationInfo.summary {
             return summary
         }

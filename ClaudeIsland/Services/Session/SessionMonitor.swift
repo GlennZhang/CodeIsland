@@ -12,7 +12,6 @@ import Foundation
 
 @MainActor
 class SessionMonitor: ObservableObject {
-    private static let staleApprovalTimeout: TimeInterval = 30
     private static let conversationParseRetryCooldown: TimeInterval = 30
 
     @Published var instances: [SessionState] = []
@@ -214,8 +213,7 @@ class SessionMonitor: ObservableObject {
             }
 
             let hasPending = HookSocketServer.shared.hasPendingPermission(toolUseId: permission.toolUseId)
-            let isExpired = Date().timeIntervalSince(permission.receivedAt) > Self.staleApprovalTimeout
-            guard !hasPending || isExpired else {
+            guard !hasPending else {
                 stalePermissionCleanupInFlight.remove(permission.toolUseId)
                 continue
             }
@@ -237,7 +235,7 @@ class SessionMonitor: ObservableObject {
     }
 
     private func shouldScheduleConversationInfoParse(for session: SessionState) -> Bool {
-        guard session.agentType == .claude,
+        guard session.agentType == .claude || session.agentType == .codex,
               !session.isDiscovered,
               !session.isArchivedForDefaultList,
               session.conversationInfo.firstUserMessage == nil,
@@ -259,10 +257,18 @@ class SessionMonitor: ObservableObject {
         conversationParseInFlight.insert(sessionId)
 
         Task { [weak self] in
-            let info = await ConversationParser.shared.parse(
-                sessionId: sessionId,
-                cwd: cwd
-            )
+            let info: ConversationInfo
+            if session.agentType == .codex {
+                info = await CodexConversationParser.shared.parse(
+                    sessionId: sessionId,
+                    cwd: cwd
+                )
+            } else {
+                info = await ConversationParser.shared.parse(
+                    sessionId: sessionId,
+                    cwd: cwd
+                )
+            }
 
             await MainActor.run {
                 guard let self else { return }
