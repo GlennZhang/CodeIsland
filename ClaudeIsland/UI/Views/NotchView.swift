@@ -80,7 +80,7 @@ struct NotchView: View {
             }
 
             switch session.phase {
-            case .waitingForApproval:
+            case .waitingForApproval, .waitingForQuestion:
                 return true
             case .waitingForInput:
                 return Date().timeIntervalSince(session.lastActivity) <= 300
@@ -1302,7 +1302,7 @@ struct ScrollingTextView: View {
 /// Extracted to a separate struct to avoid SwiftUI type-checker complexity in NotchView.
 private struct QuestionContentWrapper: View {
     let session: SessionState
-    @ObservedObject var sessionMonitor: ClaudeSessionMonitor
+    @ObservedObject var sessionMonitor: SessionMonitor
     @ObservedObject var viewModel: NotchViewModel
 
     var body: some View {

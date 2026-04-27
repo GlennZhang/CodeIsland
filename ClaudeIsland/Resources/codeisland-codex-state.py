@@ -32,7 +32,10 @@ BLOCKING_TIMEOUT_SECONDS = 30
 #                     "permissionDecision": "deny",
 #                     "permissionDecisionReason": "<reason>"
 #                   }}
-# Timeout/disconnect: Same as deny (fail-closed).
+# User deny:        Exit code 0 with JSON stdout denying the command.
+# App unavailable:  Exit code 0 with no stdout. CodeIsland is an observer/UI
+#                   layer and must not become a global command blocker when the
+#                   app is not running.
 #
 # Classification inputs (from Codex hook payload):
 #   - permission_mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions"
@@ -63,6 +66,7 @@ READ_ONLY_PREFIXES = [
 ]
 
 ROUTINE_EXECUTION_PREFIXES = [
+    "open",
     "xcodebuild", "swift test", "swift build",
     "pytest", "python -m pytest", "python3 -m pytest", "uv run pytest",
     "npm test", "npm run test", "npm run build", "npm run lint", "npm run check",
@@ -107,6 +111,17 @@ WRITE_SCRIPT_MARKERS = [
     "Popen(", "run(", "exec(", "spawn(", "requests.post", "requests.put",
     "requests.patch", "requests.delete", "curl ", "tee(",
 ]
+
+UNSAFE_CURL_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+CURL_WRITE_FLAGS = {
+    "-o", "--output", "-O", "--remote-name", "-J", "--remote-header-name",
+    "--output-dir", "--create-dirs",
+}
+CURL_MUTATING_FLAGS = {
+    "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+    "-F", "--form", "--form-string", "-T", "--upload-file",
+    "--request-target",
+}
 
 
 def debug_log(event: str, **fields) -> None:
@@ -193,6 +208,31 @@ def is_read_only_script_eval(tokens: list[str], command: str) -> bool:
     return any(marker.lower() in lowered for marker in READ_ONLY_SCRIPT_MARKERS)
 
 
+def curl_policy(tokens: list[str]) -> Optional[Tuple[str, str]]:
+    if not tokens or tokens[0] != "curl":
+        return None
+
+    for index, token in enumerate(tokens[1:], start=1):
+        if token in CURL_WRITE_FLAGS:
+            return ("approvalRequired", f"curl_write_flag:{token}")
+        if any(token.startswith(flag + "=") for flag in CURL_WRITE_FLAGS if flag.startswith("--")):
+            return ("approvalRequired", f"curl_write_flag:{token.split('=', 1)[0]}")
+        if token in CURL_MUTATING_FLAGS:
+            return ("approvalRequired", f"curl_mutating_flag:{token}")
+        if any(token.startswith(flag + "=") for flag in CURL_MUTATING_FLAGS if flag.startswith("--")):
+            return ("approvalRequired", f"curl_mutating_flag:{token.split('=', 1)[0]}")
+        if token in {"-X", "--request"} and index + 1 < len(tokens):
+            method = tokens[index + 1].upper()
+            if method in UNSAFE_CURL_METHODS:
+                return ("approvalRequired", f"curl_method:{method}")
+        if token.startswith("-X") and len(token) > 2:
+            method = token[2:].upper()
+            if method in UNSAFE_CURL_METHODS:
+                return ("approvalRequired", f"curl_method:{method}")
+
+    return ("activityOnly", "network_read:curl")
+
+
 def classify_command(command: str) -> Tuple[str, str]:
     cmd = strip_leading_assignments(command)
     if not cmd:
@@ -208,6 +248,9 @@ def classify_command(command: str) -> Tuple[str, str]:
 
     tokens = shell_split(cmd)
     if tokens:
+        curl_result = curl_policy(tokens)
+        if curl_result:
+            return curl_result
         if is_read_only_sed(tokens):
             return ("activityOnly", "read_only:sed")
         if is_read_only_perl(tokens):
@@ -229,10 +272,6 @@ def classify_command(command: str) -> Tuple[str, str]:
 
     if " | tee " in f" {cmd} " or cmd.startswith("tee ") or " tee " in f" {cmd} ":
         return ("approvalRequired", "tee_write_like")
-
-    if "curl " in f" {cmd} " or cmd.startswith("curl "):
-        if any(flag in cmd for flag in [" -X POST", " -X PUT", " -X PATCH", " -X DELETE", " --request "]):
-            return ("approvalRequired", "network_mutation")
 
     return ("approvalRequired", "unknown_command")
 
@@ -334,9 +373,6 @@ def main():
         )
         if response and response.get("decision") == "deny":
             emit_denial(response.get("reason") or "Denied by user via CodeIsland")
-        elif response is None:
-            # Approval-required requests fail closed when the listener disappears.
-            emit_denial("CodeIsland approval service unavailable")
         sys.exit(0)
 
     send_event(state)

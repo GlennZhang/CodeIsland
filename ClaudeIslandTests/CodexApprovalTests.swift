@@ -3,7 +3,7 @@
 //  ClaudeIslandTests
 //
 //  Tests for Codex PreToolUse classification, approval response protocol,
-//  and fail-closed teardown behavior.
+//  and app-unavailable pass-through behavior.
 //
 
 import XCTest
@@ -337,13 +337,19 @@ final class CodexApprovalTests: XCTestCase {
     func test_pythonHook_mutatingCommand_requiresApproval() throws {
         let result = try runCodexHook(command: "rm -rf build")
         XCTAssertEqual(result.status, 0)
-        XCTAssertTrue(result.stdout.contains("\"permissionDecision\":\"deny\""))
+        XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     func test_pythonHook_unknownCommand_requiresApproval() throws {
         let result = try runCodexHook(command: "python3 manage.py migrate")
         XCTAssertEqual(result.status, 0)
-        XCTAssertTrue(result.stdout.contains("\"permissionDecision\":\"deny\""))
+        XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    func test_pythonHook_openCommand_returnsImmediately() throws {
+        let result = try runCodexHook(command: "open /Applications")
+        XCTAssertEqual(result.status, 0)
+        XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     func test_pythonHook_nonBashTool_doesNotBlock() throws {
@@ -377,7 +383,7 @@ final class CodexApprovalTests: XCTestCase {
             command: "python3 -c \"from pathlib import Path; Path(\\\"x\\\").write_text(\\\"1\\\")\""
         )
         XCTAssertEqual(result.status, 0)
-        XCTAssertTrue(result.stdout.contains("\"permissionDecision\":\"deny\""))
+        XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     func test_pythonHook_npmBuild_returnsImmediately() throws {
@@ -388,6 +394,24 @@ final class CodexApprovalTests: XCTestCase {
 
     func test_pythonHook_vueTsc_returnsImmediately() throws {
         let result = try runCodexHook(command: "npx vue-tsc --noEmit")
+        XCTAssertEqual(result.status, 0)
+        XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    func test_pythonHook_curlGet_returnsImmediately() throws {
+        let result = try runCodexHook(command: "curl -s https://www.bees-energy.com/")
+        XCTAssertEqual(result.status, 0)
+        XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    func test_pythonHook_curlPost_requiresApproval() throws {
+        let result = try runCodexHook(command: "curl -X POST https://example.com/api")
+        XCTAssertEqual(result.status, 0)
+        XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    func test_pythonHook_curlOutputFile_requiresApproval() throws {
+        let result = try runCodexHook(command: "curl -o page.html https://example.com")
         XCTAssertEqual(result.status, 0)
         XCTAssertTrue(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }

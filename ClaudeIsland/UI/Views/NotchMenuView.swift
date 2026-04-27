@@ -268,6 +268,7 @@ struct PluginMenuRow: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
 }
+}
 
 // MARK: - Version Row
 

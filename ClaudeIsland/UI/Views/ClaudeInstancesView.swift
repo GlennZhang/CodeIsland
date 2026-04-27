@@ -22,14 +22,17 @@ struct ClaudeInstancesView: View {
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
 
     var body: some View {
-        if sortedInstances.isEmpty {
+        let sortedSnapshot = sortedInstances
+        let displayedSnapshot = displayedInstances(from: sortedSnapshot)
+
+        if sortedSnapshot.isEmpty {
             emptyState
         } else {
             ZStack(alignment: .bottomTrailing) {
                 VStack(spacing: 0) {
                     // Top bar: session count + settings
                     HStack {
-                        Text("\(displayedInstances.count) \(L10n.sessions)")
+                        Text("\(displayedSnapshot.count) \(L10n.sessions)")
                             .notchFont(11)
                             .notchSecondaryForeground()
                         Spacer()
@@ -47,9 +50,9 @@ struct ClaudeInstancesView: View {
                     if showBuddyCard, let buddy = buddyReader.buddy {
                         buddyCardView(buddy)
                     } else if showGrouped {
-                        groupedList
+                        groupedList(displayedInstances: displayedSnapshot, sortedInstances: sortedSnapshot)
                     } else {
-                        flatList
+                        flatList(displayedInstances: displayedSnapshot, sortedInstances: sortedSnapshot)
                     }
                 }
                 .padding(.bottom, 50)
@@ -57,13 +60,13 @@ struct ClaudeInstancesView: View {
                 // Bottom right: buddy + usage stats
                 // Hidden when buddy card open or when expanded with many sessions
                 // Also honor the user's showBuddy / showUsageBar preferences.
-                if !showBuddyCard && !(sortedInstances.count > 4 && viewModel.isInstancesExpanded)
+                if !showBuddyCard && !(sortedSnapshot.count > 4 && viewModel.isInstancesExpanded)
                     && (notchStore.customization.showBuddy || notchStore.customization.showUsageBar) {
                     VStack(alignment: .trailing, spacing: 4) {
                         // Only show buddy when ≤ 5 sessions AND the user has
                         // the showBuddy preference enabled.
                         if notchStore.customization.showBuddy,
-                           sortedInstances.count <= 5,
+                           sortedSnapshot.count <= 5,
                            let buddy = buddyReader.buddy {
                             Button {
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -88,7 +91,7 @@ struct ClaudeInstancesView: View {
                 }
 
                 // Bottom left: Codex usage stats
-                if codexGate.isEnabled && !showBuddyCard && !(sortedInstances.count > 4 && viewModel.isInstancesExpanded)
+                if codexGate.isEnabled && !showBuddyCard && !(sortedSnapshot.count > 4 && viewModel.isInstancesExpanded)
                     && notchStore.customization.showUsageBar {
                     VStack(alignment: .leading, spacing: 4) {
                         Spacer()
@@ -338,6 +341,10 @@ struct ClaudeInstancesView: View {
     }
 
     private var displayedInstances: [SessionState] {
+        displayedInstances(from: sortedInstances)
+    }
+
+    private func displayedInstances(from sortedInstances: [SessionState]) -> [SessionState] {
         guard !viewModel.isInstancesExpanded else { return sortedInstances }
         return sortedInstances.filter { shouldShowInCollapsedList($0) }
     }
@@ -388,7 +395,7 @@ struct ClaudeInstancesView: View {
     }
 
     /// Sessions grouped by project (cwd), with per-group sorting preserved
-    private var projectGroups: [ProjectGroup] {
+    private func projectGroups(displayedInstances: [SessionState]) -> [ProjectGroup] {
         ProjectGroup.group(sessions: displayedInstances)
     }
 
@@ -398,7 +405,7 @@ struct ClaudeInstancesView: View {
         }
 
         switch session.phase {
-        case .waitingForApproval:
+        case .waitingForApproval, .waitingForQuestion:
             return true
         case .waitingForInput:
             return Date().timeIntervalSince(session.lastActivity) <= 300
@@ -409,12 +416,14 @@ struct ClaudeInstancesView: View {
         }
     }
 
-    private var flatList: some View {
+    private func flatList(displayedInstances: [SessionState], sortedInstances: [SessionState]) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 0) {
+                let lastIndex = displayedInstances.count - 1
                 ForEach(Array(displayedInstances.enumerated()), id: \.element.stableId) { index, session in
                     InstanceRow(
                         session: session,
+                        animatedIcon: !viewModel.isInstancesExpanded,
                         onFocus: { focusSession(session) },
                         onChat: { openChat(session) },
                         onArchive: { archiveSession(session) },
@@ -429,7 +438,7 @@ struct ClaudeInstancesView: View {
                     }
 
                     // Gradient divider between rows
-                    if index < displayedInstances.count - 1 {
+                    if index < lastIndex {
                         LinearGradient(
                             colors: [.clear, .white.opacity(0.06), .clear],
                             startPoint: .leading,
@@ -440,7 +449,7 @@ struct ClaudeInstancesView: View {
                     }
                 }
 
-                listFooter
+                listFooter(sortedInstances: sortedInstances, displayedInstances: displayedInstances)
             }
             .padding(.horizontal, 2)
             .padding(.vertical, 2)
@@ -448,10 +457,10 @@ struct ClaudeInstancesView: View {
         .scrollBounceBehavior(.basedOnSize)
     }
 
-    private var groupedList: some View {
+    private func groupedList(displayedInstances: [SessionState], sortedInstances: [SessionState]) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(spacing: 4) {
-                ForEach(projectGroups) { group in
+                ForEach(projectGroups(displayedInstances: displayedInstances)) { group in
                     ProjectGroupHeader(
                         group: group,
                         isCollapsed: collapsedGroups.contains(group.id)
@@ -469,6 +478,7 @@ struct ClaudeInstancesView: View {
                         ForEach(group.sessions, id: \.stableId) { session in
                             InstanceRow(
                                 session: session,
+                                animatedIcon: !viewModel.isInstancesExpanded,
                                 onFocus: { focusSession(session) },
                                 onChat: { openChat(session) },
                                 onArchive: { archiveSession(session) },
@@ -480,7 +490,7 @@ struct ClaudeInstancesView: View {
                     }
                 }
 
-                listFooter
+                listFooter(sortedInstances: sortedInstances, displayedInstances: displayedInstances)
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
@@ -489,7 +499,9 @@ struct ClaudeInstancesView: View {
     }
 
     @ViewBuilder
-    private var listFooter: some View {
+    private func listFooter(sortedInstances: [SessionState], displayedInstances: [SessionState]) -> some View {
+        let hasHiddenSessions = sortedInstances.count > displayedInstances.count
+
         if (sortedInstances.count > 4 || hasHiddenSessions) && !viewModel.isInstancesExpanded {
             Button {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -584,6 +596,7 @@ struct ClaudeInstancesView: View {
 
 struct InstanceRow: View {
     let session: SessionState
+    let animatedIcon: Bool
     let onFocus: () -> Void
     let onChat: () -> Void
     let onArchive: () -> Void
@@ -728,21 +741,36 @@ struct InstanceRow: View {
             HStack(alignment: .top, spacing: isActive ? 8 : 6) {
                 // Buddy icon or pixel cat
                 ZStack {
-                    switch notchStore.customization.mascotStyle {
-                    case .buddy:
-                        if let buddy = buddyReader.buddy {
-                            EmojiPixelView(emoji: buddy.species.emoji, style: .rock)
+                    if animatedIcon {
+                        switch notchStore.customization.mascotStyle {
+                        case .buddy:
+                            if let buddy = buddyReader.buddy {
+                                EmojiPixelView(emoji: buddy.species.emoji, style: .rock)
+                                    .scaleEffect(iconScale)
+                            } else {
+                                MascotRouterView(agentType: session.agentType, state: animationState)
+                                    .scaleEffect(iconScale)
+                            }
+                        case .pixelCat:
+                            PixelCharacterView(state: animationState)
                                 .scaleEffect(iconScale)
-                        } else {
+                        case .multiMascot:
                             MascotRouterView(agentType: session.agentType, state: animationState)
                                 .scaleEffect(iconScale)
                         }
-                    case .pixelCat:
-                        PixelCharacterView(state: animationState)
-                            .scaleEffect(iconScale)
-                    case .multiMascot:
-                        MascotRouterView(agentType: session.agentType, state: animationState)
-                            .scaleEffect(iconScale)
+                    } else {
+                        Text(session.agentType.shortLabel)
+                            .font(.system(size: isActive ? 11 : 10, weight: .bold, design: .rounded))
+                            .foregroundColor(session.agentType.tagColor)
+                            .frame(width: iconSize, height: iconSize)
+                            .background(
+                                Circle()
+                                    .fill(session.agentType.tagColor.opacity(isActive ? 0.16 : 0.08))
+                                    .overlay(
+                                        Circle()
+                                            .strokeBorder(session.agentType.tagColor.opacity(0.28), lineWidth: 0.6)
+                                    )
+                            )
                     }
                     // Status dot overlay
                     Circle()

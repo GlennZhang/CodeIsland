@@ -11,7 +11,7 @@ import SwiftUI
 struct AskUserQuestionView: View {
     let session: SessionState
     let context: QuestionContext
-    @ObservedObject var sessionMonitor: ClaudeSessionMonitor
+    @ObservedObject var sessionMonitor: SessionMonitor
     @State private var customTexts: [Int: String] = [:]  // per-question custom text
     @State private var hoveredKey: String? = nil
     @State private var isSending: Bool = false
