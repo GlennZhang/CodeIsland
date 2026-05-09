@@ -81,6 +81,37 @@ final class TerminalWriter {
 
     private init() {}
 
+    enum CmuxSubmissionPlan: Equatable {
+        case appendReturn(String)
+        case sendThenKey(text: String, key: String)
+    }
+
+    /// Decide the terminal backend once we know whether this session can be
+    /// targeted precisely via cmux. cmux must win over the coarse
+    /// `terminalApp` hint, otherwise Codex sessions labeled "Codex" bypass the
+    /// cmux path even when the hook script already gave us exact cmux IDs.
+    nonisolated static func preferredTerminalBackend(terminalApp: String?, hasCmuxTarget: Bool, detectedFallback: String?) -> String? {
+        if hasCmuxTarget {
+            return "cmux"
+        }
+        if let app = terminalApp, !app.isEmpty {
+            return app.lowercased()
+        }
+        return detectedFallback
+    }
+
+    /// Codex's TUI runs in raw mode and wants a real Enter key event to submit.
+    /// Appending `\r` to the text stream only inserts a newline in its composer.
+    nonisolated static func cmuxSubmissionPlan(text: String, terminalApp: String?, hasSurfaceTarget: Bool) -> CmuxSubmissionPlan {
+        let normalizedApp = terminalApp?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedApp == "codex", hasSurfaceTarget {
+            return .sendThenKey(text: text, key: "enter")
+        }
+
+        let escaped = text.replacingOccurrences(of: "\n", with: "\r")
+        return .appendReturn("\(escaped)\r")
+    }
+
     // MARK: - Diagnostics (for Settings → cmux Connection tab)
 
     /// A snapshot of everything the cmux-relay path needs to work. Consumed by
@@ -327,7 +358,7 @@ final class TerminalWriter {
         let resolved = await resolveTerminalApp(terminalApp: terminalApp, claudeUuid: claudeUuid, cwd: cwd, livePid: livePid, cmuxWorkspaceId: cmuxWorkspaceId, cmuxSurfaceId: cmuxSurfaceId)
 
         if resolved == "cmux" {
-            return await sendViaCmuxDirect(text, claudeUuid: claudeUuid, cwd: cwd, livePid: livePid, cmuxWorkspaceId: cmuxWorkspaceId, cmuxSurfaceId: cmuxSurfaceId)
+            return await sendViaCmuxDirect(text, claudeUuid: claudeUuid, cwd: cwd, livePid: livePid, cmuxWorkspaceId: cmuxWorkspaceId, cmuxSurfaceId: cmuxSurfaceId, terminalApp: terminalApp)
         }
 
         return await sendViaTerminalFallback(text, cwd: cwd, terminalApp: resolved)
@@ -780,7 +811,7 @@ final class TerminalWriter {
         return ok
     }
 
-    private func sendViaCmuxDirect(_ text: String, claudeUuid: String, cwd: String?, livePid: Int?, cmuxWorkspaceId: String? = nil, cmuxSurfaceId: String? = nil) async -> Bool {
+    private func sendViaCmuxDirect(_ text: String, claudeUuid: String, cwd: String?, livePid: Int?, cmuxWorkspaceId: String? = nil, cmuxSurfaceId: String? = nil, terminalApp: String? = nil) async -> Bool {
         // Resolution order (in increasing fallback unreliability):
         //   1. **Live PID from CodeIsland's hook tracking** — captured at hook
         //      time via `os.getppid()`, this is the actual Claude process for
@@ -796,14 +827,31 @@ final class TerminalWriter {
             return false
         }
 
-        let escaped = text.replacingOccurrences(of: "\n", with: "\r")
         var args = ["send"]
         args += ["--workspace", wsId]
         if let surfId { args += ["--surface", surfId] }
-        args += ["--", "\(escaped)\r"]
-        guard await cmuxRun(args) != nil else {
-            Self.logger.error("cmux send failed for workspace=\(wsId)")
-            return false
+        let plan = Self.cmuxSubmissionPlan(text: text, terminalApp: terminalApp, hasSurfaceTarget: surfId != nil)
+        switch plan {
+        case .appendReturn(let payload):
+            args += ["--", payload]
+            guard await cmuxRun(args) != nil else {
+                Self.logger.error("cmux send failed for workspace=\(wsId)")
+                return false
+            }
+        case .sendThenKey(let payload, let key):
+            args += ["--", payload]
+            guard await cmuxRun(args) != nil else {
+                Self.logger.error("cmux send failed for workspace=\(wsId)")
+                return false
+            }
+            guard let surfId else {
+                Self.logger.error("cmux submit-key requires a surface for workspace=\(wsId)")
+                return false
+            }
+            guard await cmuxRun(["send-key", "--workspace", wsId, "--surface", surfId, "--", key]) != nil else {
+                Self.logger.error("cmux send-key '\(key)' failed for workspace=\(wsId)")
+                return false
+            }
         }
         Self.logger.info("Sent message via cmux (workspace=\(wsId.prefix(8)) surface=\(surfId?.prefix(8).description ?? "-"))")
         return true
@@ -1082,16 +1130,21 @@ final class TerminalWriter {
     // MARK: - Terminal Routing & Fallbacks
 
     /// Decide which terminal backend to use for a given session.
-    /// Priority: explicit terminalApp → cmux env-var detection → running terminal probe.
+    /// Priority: cmux target → explicit terminalApp → running terminal probe.
     private func resolveTerminalApp(terminalApp: String?, claudeUuid: String, cwd: String?, livePid: Int?, cmuxWorkspaceId: String? = nil, cmuxSurfaceId: String? = nil) async -> String? {
-        if let app = terminalApp, !app.isEmpty {
-            return app.lowercased()
-        }
         // Check if the process lives inside cmux (has CMUX_WORKSPACE_ID env var or direct IDs)
-        if await findCmuxTarget(claudeUuid: claudeUuid, cwd: cwd, livePid: livePid, cmuxWorkspaceId: cmuxWorkspaceId, cmuxSurfaceId: cmuxSurfaceId) != nil {
-            return "cmux"
-        }
-        return detectRunningTerminal()
+        let hasCmuxTarget = await findCmuxTarget(
+            claudeUuid: claudeUuid,
+            cwd: cwd,
+            livePid: livePid,
+            cmuxWorkspaceId: cmuxWorkspaceId,
+            cmuxSurfaceId: cmuxSurfaceId
+        ) != nil
+        return Self.preferredTerminalBackend(
+            terminalApp: terminalApp,
+            hasCmuxTarget: hasCmuxTarget,
+            detectedFallback: detectRunningTerminal()
+        )
     }
 
     /// Check which supported terminal is currently running (excluding cmux).

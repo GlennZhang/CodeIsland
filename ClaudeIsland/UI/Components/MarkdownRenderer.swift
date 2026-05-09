@@ -8,6 +8,10 @@
 import Markdown
 import SwiftUI
 
+private func markdownTheme() -> ThemeResolver {
+    ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+}
+
 // MARK: - Document Cache
 
 /// Caches parsed markdown documents to avoid re-parsing
@@ -44,7 +48,7 @@ struct MarkdownText: View {
 
     private let document: Document
 
-    init(_ text: String, color: Color = .white.opacity(0.9), fontSize: CGFloat = 13) {
+    init(_ text: String, color: Color = markdownTheme().chatBodyText, fontSize: CGFloat = 13) {
         self.text = text
         self.baseColor = color
         self.fontSize = fontSize
@@ -222,7 +226,7 @@ private struct InlineRenderer: View {
         } else if let link = inline as? Markdown.Link {
             let plainText = link.plainText
             return SwiftUI.Text(plainText)
-                .foregroundColor(Color.blue)
+                .foregroundColor(markdownTheme().thinkingColor)
                 .underline()
         } else if let strike = inline as? Strikethrough {
             let plainText = strike.plainText
@@ -251,16 +255,17 @@ private struct InlineRenderer: View {
 
 private struct CodeBlockView: View {
     let code: String
+    private var theme: ThemeResolver { markdownTheme() }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             SwiftUI.Text(code)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(theme.primaryText)
                 .padding(10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.08))
+        .background(theme.overlay.opacity(0.18))
         .cornerRadius(6)
     }
 }

@@ -11,6 +11,9 @@ import SwiftUI
 struct PluginContentView: View {
     let pluginId: String
     let viewModel: NotchViewModel
+    private var theme: ThemeResolver {
+        ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+    }
 
     var body: some View {
         // Plugin fills the entire panel. The back button becomes a
@@ -26,7 +29,7 @@ struct PluginContentView: View {
             } else {
                 Text("Plugin not found")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(theme.mutedText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -41,11 +44,11 @@ struct PluginContentView: View {
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(theme.primaryText)
                     .frame(width: 26, height: 26)
-                    .background(Circle().fill(Color.black.opacity(0.4)))
+                    .background(Circle().fill(theme.overlay.opacity(0.88)))
                     .overlay(
-                        Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                        Circle().strokeBorder(theme.border.opacity(0.75), lineWidth: 0.5)
                     )
             }
             .buttonStyle(.plain)

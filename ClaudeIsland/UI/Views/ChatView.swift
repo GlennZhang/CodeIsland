@@ -27,6 +27,7 @@ struct ChatView: View {
     @State private var isBottomVisible: Bool = true
     @FocusState private var isInputFocused: Bool
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     init(sessionId: String, initialSession: SessionState, sessionMonitor: SessionMonitor, viewModel: NotchViewModel) {
         self.sessionId = sessionId
@@ -214,7 +215,7 @@ struct ChatView: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isHeaderHovered ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isHeaderHovered ? theme.overlay.opacity(0.22) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -222,7 +223,7 @@ struct ChatView: View {
         .padding(.horizontal, 8)
         .padding(.top, 28) // Push content below camera module
         .padding(.bottom, 4)
-        .background(Color.white.opacity(0.04))
+        .background(theme.overlay.opacity(0.12))
         .overlay(alignment: .bottom) {
             LinearGradient(
                 colors: [fadeColor.opacity(0.7), fadeColor.opacity(0)],
@@ -256,7 +257,7 @@ struct ChatView: View {
     private var loadingState: some View {
         VStack(spacing: 8) {
             ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.4)))
+                .progressViewStyle(CircularProgressViewStyle(tint: theme.mutedText))
                 .scaleEffect(0.8)
             Text(L10n.loadingMessages)
                 .font(.system(size: 13, weight: .medium))
@@ -288,7 +289,7 @@ struct ChatView: View {
     /// the gradient fades into the live background color instead of
     /// hard black (which looked wrong on Sunset / Paper / Mint).
     private var fadeColor: Color {
-        NotchPalette.for(notchStore.customization.theme).bg
+        theme.background
     }
 
     private var messageList: some View {
@@ -388,10 +389,10 @@ struct ChatView: View {
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.white.opacity(0.12))
+                        .fill(theme.overlay.opacity(0.22))
                         .overlay(
                             RoundedRectangle(cornerRadius: 20)
-                                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                                .strokeBorder(theme.border.opacity(0.85), lineWidth: 1)
                         )
                 )
             }
@@ -399,7 +400,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.white.opacity(0.04))
+        .background(theme.overlay.opacity(0.1))
         .overlay(alignment: .top) {
             LinearGradient(
                 colors: [fadeColor.opacity(0), fadeColor.opacity(0.7)],
@@ -508,17 +509,19 @@ struct MessageItemView: View {
 
 struct UserMessageView: View {
     let text: String
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     var body: some View {
         HStack {
             Spacer(minLength: 60)
 
-            MarkdownText(text, color: .white, fontSize: 13)
+            MarkdownText(text, color: theme.chatBubbleText, fontSize: 13)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(Color.white.opacity(0.15))
+                        .fill(theme.chatBubbleFill)
                 )
         }
     }
@@ -528,16 +531,18 @@ struct UserMessageView: View {
 
 struct AssistantMessageView: View {
     let text: String
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             // White dot indicator
             Circle()
-                .fill(Color.white.opacity(0.6))
+                .fill(theme.assistantDot.opacity(theme.isRetroArcade ? 1.0 : 0.6))
                 .frame(width: 6, height: 6)
                 .padding(.top, 5)
 
-            MarkdownText(text, color: .white.opacity(0.9), fontSize: 13)
+            MarkdownText(text, color: theme.chatBodyText, fontSize: 13)
 
             Spacer(minLength: 60)
         }
@@ -548,8 +553,12 @@ struct AssistantMessageView: View {
 
 struct ProcessingIndicatorView: View {
     private static let baseTexts = [L10n.processing, L10n.workingBaseLabel]
-    private let color = Color(red: 0.85, green: 0.47, blue: 0.34) // Claude orange
     private let baseText: String
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var color: Color {
+        let theme = ThemeResolver(theme: notchStore.customization.theme)
+        return theme.isRetroArcade ? theme.primaryText : Color(red: 0.85, green: 0.47, blue: 0.34)
+    }
 
     @State private var dotCount: Int = 1
     private let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
@@ -587,34 +596,28 @@ struct ProcessingIndicatorView: View {
 struct ToolCallView: View {
     let tool: ToolCallItem
     let sessionId: String
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
 
     @State private var pulseOpacity: Double = 0.6
     @State private var isExpanded: Bool = false
     @State private var isHovering: Bool = false
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     private var statusColor: Color {
         switch tool.status {
-        case .running:
-            return Color.white
-        case .waitingForApproval:
-            return Color.orange
-        case .success:
-            return Color.green
-        case .error, .interrupted:
-            return Color.red
+        case .running: return theme.primaryText
+        case .waitingForApproval: return theme.needsYouColor
+        case .success: return theme.doneColor
+        case .error, .interrupted: return theme.errorColor
         }
     }
 
     private var textColor: Color {
         switch tool.status {
-        case .running:
-            return .white.opacity(0.6)
-        case .waitingForApproval:
-            return Color.orange.opacity(0.9)
-        case .success:
-            return .white.opacity(0.7)
-        case .error, .interrupted:
-            return Color.red.opacity(0.8)
+        case .running: return theme.secondaryText
+        case .waitingForApproval: return theme.needsYouColor
+        case .success: return theme.secondaryText
+        case .error, .interrupted: return theme.errorColor
         }
     }
 
@@ -725,7 +728,7 @@ struct ToolCallView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(canExpand && isHovering ? Color.white.opacity(0.05) : Color.clear)
+                .fill(canExpand && isHovering ? theme.overlay.opacity(0.18) : Color.clear)
         )
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -845,6 +848,8 @@ struct SubagentToolRow: View {
 /// Summary of subagent tools (shown when Task is expanded after completion)
 struct SubagentToolsSummary: View {
     let tools: [SubagentToolCall]
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     private var toolCounts: [(String, Int)] {
         var counts: [String: Int] = [:]
@@ -877,7 +882,7 @@ struct SubagentToolsSummary: View {
         .padding(.horizontal, 8)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(0.03))
+                .fill(theme.overlay.opacity(0.12))
         )
     }
 }
@@ -886,6 +891,8 @@ struct SubagentToolsSummary: View {
 
 struct ThinkingView: View {
     let text: String
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     @State private var isExpanded = false
 
@@ -893,16 +900,18 @@ struct ThinkingView: View {
         text.count > 80
     }
 
+    private var subtleMutedOpacity: Double { theme.isRetroArcade ? 0.72 : 0.5 }
+
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             Circle()
-                .fill(Color.gray.opacity(0.5))
+                .fill(theme.mutedText.opacity(subtleMutedOpacity))
                 .frame(width: 6, height: 6)
                 .padding(.top, 4)
 
             Text(isExpanded ? text : String(text.prefix(80)) + (canExpand ? "..." : ""))
                 .font(.system(size: 11))
-                .foregroundColor(.gray)
+                .foregroundColor(theme.mutedText)
                 .italic()
                 .lineLimit(isExpanded ? nil : 1)
                 .multilineTextAlignment(.leading)
@@ -912,7 +921,7 @@ struct ThinkingView: View {
             if canExpand {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.gray.opacity(0.5))
+                    .foregroundColor(theme.mutedText.opacity(subtleMutedOpacity))
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .padding(.top, 3)
             }
@@ -933,11 +942,14 @@ struct ThinkingView: View {
 // MARK: - Interrupted Message
 
 struct InterruptedMessageView: View {
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
+
     var body: some View {
         HStack {
             Text(L10n.interrupted)
                 .font(.system(size: 13))
-                .foregroundColor(.red)
+                .foregroundColor(theme.errorColor)
             Spacer()
         }
     }
@@ -950,9 +962,14 @@ struct ChatInteractivePromptBar: View {
     let agentName: String
     let isInTmux: Bool
     let onGoToTerminal: () -> Void
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     @State private var showContent = false
     @State private var showButton = false
+    private var terminalButtonFill: Color { theme.isRetroArcade ? theme.terminalBadgeFill : theme.primaryText.opacity(0.95) }
+    private var terminalButtonText: Color { theme.isRetroArcade ? theme.primaryText : theme.inverseText }
+    private var subtitleColor: Color { theme.isRetroArcade ? theme.primaryText.opacity(0.82) : theme.secondaryText.opacity(0.7) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -960,10 +977,11 @@ struct ChatInteractivePromptBar: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(MCPToolFormatter.formatToolName("AskUserQuestion"))
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(TerminalColors.amber)
+                    .foregroundColor(theme.needsYouColor)
                 Text(L10n.agentNeedsInput(agentName))
+
                     .font(.system(size: 11))
-                    .opacity(0.5)
+                    .foregroundColor(subtitleColor)
                     .lineLimit(1)
             }
             .opacity(showContent ? 1 : 0)
@@ -981,10 +999,10 @@ struct ChatInteractivePromptBar: View {
                     Text(L10n.terminal)
                         .font(.system(size: 13, weight: .medium))
                 }
-                .foregroundColor(.black)
+                .foregroundColor(terminalButtonText)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(Color.white.opacity(0.95))
+                .background(terminalButtonFill)
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -994,7 +1012,7 @@ struct ChatInteractivePromptBar: View {
         .frame(minHeight: 44)  // Consistent height with other bars
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.white.opacity(0.04))
+        .background(theme.overlay.opacity(0.12))
         .onAppear {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
                 showContent = true
@@ -1065,9 +1083,18 @@ struct ChatApprovalBar: View {
     let rawToolInput: [String: AnyCodable]?
     let onApprove: () -> Void
     let onDeny: () -> Void
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     @State private var showContent = false
     @State private var showButtons = false
+    private var panelBackground: Color { theme.isRetroArcade ? theme.subduedBadgeFill : Color(red: 0.102, green: 0.102, blue: 0.180) }
+    private var diffPreviewBackground: Color { theme.isRetroArcade ? theme.overlay.opacity(0.45) : Color(red: 0.067, green: 0.067, blue: 0.094) }
+    private var secondaryBodyColor: Color { theme.isRetroArcade ? theme.primaryText.opacity(0.82) : theme.primaryText.opacity(0.5) }
+    private var denyShortcutColor: Color { theme.isRetroArcade ? theme.primaryText.opacity(0.7) : theme.primaryText.opacity(0.4) }
+    private var allowTextColor: Color { theme.isRetroArcade ? theme.primaryText : theme.inverseText }
+    private var allowShortcutColor: Color { theme.isRetroArcade ? theme.primaryText.opacity(0.7) : theme.inverseText.opacity(0.5) }
+    private var allowButtonFill: Color { theme.isRetroArcade ? theme.agentBadgeFill : theme.doneColor }
 
     /// Extract file path from tool input
     private var filePath: String? {
@@ -1132,25 +1159,25 @@ struct ChatApprovalBar: View {
             // 1. Header: orange circle + "Permission Request"
             HStack(spacing: 6) {
                 Circle()
-                    .fill(Color(red: 1.0, green: 0.6, blue: 0.0))
+                    .fill(theme.needsYouColor)
                     .frame(width: 8, height: 8)
                 Text(L10n.permissionRequest)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Color(red: 1.0, green: 0.7, blue: 0.2))
+                    .foregroundColor(theme.needsYouColor)
             }
 
             // 2. Tool info: warning triangle + tool name + file path
             HStack(spacing: 5) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 10))
-                    .foregroundColor(Color(red: 1.0, green: 0.7, blue: 0.2))
+                    .foregroundColor(theme.needsYouColor)
                 Text(MCPToolFormatter.formatToolName(tool))
                     .font(.system(size: 11, weight: .medium))
                     .opacity(0.9)
                 if let path = filePath {
                     Text(shortenPath(path))
                         .font(.system(size: 11, design: .monospaced))
-                        .opacity(0.5)
+                        .foregroundColor(secondaryBodyColor)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -1163,17 +1190,17 @@ struct ChatApprovalBar: View {
                         ForEach(Array(diffLines.enumerated()), id: \.offset) { _, line in
                             Text(line.text)
                                 .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(line.type.textColor)
+                                .foregroundColor(line.type.textColor(theme: theme))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(line.type.backgroundColor)
+                                .background(line.type.backgroundColor(theme: theme))
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 120)
-                .background(Color(red: 0.067, green: 0.067, blue: 0.094)) // #111118
+                .background(diffPreviewBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 // Diff summary badge
@@ -1182,12 +1209,12 @@ struct ChatApprovalBar: View {
                         if summary.added > 0 {
                             Text("+\(summary.added)")
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundColor(Color(red: 0.29, green: 0.87, blue: 0.50)) // #4ADE80
+                                .foregroundColor(theme.doneColor)
                         }
                         if summary.removed > 0 {
                             Text("-\(summary.removed)")
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundColor(Color(red: 0.94, green: 0.27, blue: 0.27)) // #EF4444
+                                .foregroundColor(theme.errorColor)
                         }
                     }
                 }
@@ -1195,7 +1222,7 @@ struct ChatApprovalBar: View {
                 // Fallback: show formatted tool input for non-edit tools
                 Text(input)
                     .font(.system(size: 10, design: .monospaced))
-                    .opacity(0.5)
+                    .foregroundColor(secondaryBodyColor)
                     .lineLimit(2)
             }
 
@@ -1210,15 +1237,15 @@ struct ChatApprovalBar: View {
                             .font(.system(size: 13, weight: .medium))
                         Text("\u{2318}N")
                             .font(.system(size: 11, weight: .regular))
-                            .opacity(0.4)
+                            .foregroundColor(denyShortcutColor)
                     }
-                    .opacity(0.85)
+                    .foregroundColor(theme.primaryText.opacity(theme.isRetroArcade ? 0.9 : 0.85))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.08))
+                    .background(theme.overlay.opacity(0.22))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                            .stroke(theme.border.opacity(0.8), lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
@@ -1233,19 +1260,19 @@ struct ChatApprovalBar: View {
                             .font(.system(size: 13, weight: .bold))
                         Text("\u{2318}Y")
                             .font(.system(size: 11, weight: .regular))
-                            .foregroundColor(.black.opacity(0.5))
+                            .foregroundColor(allowShortcutColor)
                     }
-                    .foregroundColor(.black)
+                    .foregroundColor(allowTextColor)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background(Color(red: 0.29, green: 0.87, blue: 0.50)) // #4ADE80
+                    .background(allowButtonFill)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(16)
-        .background(Color(red: 0.102, green: 0.102, blue: 0.180)) // #1A1A2E
+        .background(panelBackground)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .opacity(showContent ? 1 : 0)
         .offset(y: showContent ? 0 : 10)
@@ -1275,18 +1302,18 @@ private enum ApprovalDiffLineType {
     case removed
     case context
 
-    var textColor: Color {
+    func textColor(theme: ThemeResolver) -> Color {
         switch self {
         case .added: return Color(red: 0.29, green: 0.87, blue: 0.50) // #4ADE80
         case .removed: return Color(red: 0.94, green: 0.27, blue: 0.27) // #EF4444
-        case .context: return .white.opacity(0.5)
+        case .context: return theme.isRetroArcade ? theme.primaryText.opacity(0.82) : .white.opacity(0.5)
         }
     }
 
-    var backgroundColor: Color {
+    func backgroundColor(theme: ThemeResolver) -> Color {
         switch self {
-        case .added: return Color(red: 0.29, green: 0.87, blue: 0.50).opacity(0.1)
-        case .removed: return Color(red: 0.94, green: 0.27, blue: 0.27).opacity(0.1)
+        case .added: return Color(red: 0.29, green: 0.87, blue: 0.50).opacity(theme.isRetroArcade ? 0.16 : 0.1)
+        case .removed: return Color(red: 0.94, green: 0.27, blue: 0.27).opacity(theme.isRetroArcade ? 0.16 : 0.1)
         case .context: return .clear
         }
     }
@@ -1298,6 +1325,8 @@ private enum ApprovalDiffLineType {
 struct NewMessagesIndicator: View {
     let count: Int
     let onTap: () -> Void
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     @State private var isHovering: Bool = false
 
@@ -1310,12 +1339,12 @@ struct NewMessagesIndicator: View {
                 Text(L10n.newMessages(count))
                     .font(.system(size: 12, weight: .medium))
             }
-            .foregroundColor(.white)
+            .foregroundColor(theme.inverseText)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(
                 Capsule()
-                    .fill(Color(red: 0.85, green: 0.47, blue: 0.34)) // Claude orange
+                    .fill(theme.needsYouColor)
                     .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
             )
             .scaleEffect(isHovering ? 1.05 : 1.0)

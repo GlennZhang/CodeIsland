@@ -53,6 +53,9 @@ struct NotchLiveEditOverlay: View {
     /// session, so the controller that created the panel can tear
     /// down the window.
     var onExit: () -> Void = {}
+    private var theme: ThemeResolver {
+        ThemeResolver(theme: store.customization.theme)
+    }
 
     private let neonGreen = Color(hex: "CAFF00")
     private let neonPink  = Color(hex: "FB7185")
@@ -172,7 +175,7 @@ struct NotchLiveEditOverlay: View {
                 //    used to mutate `horizontalOffset` in real time.
                 if subMode == .drag {
                     Rectangle()
-                        .fill(Color.white.opacity(0.001))
+                        .fill(theme.overlay.opacity(0.001))
                         .frame(
                             width: visibleNotchWidth + 16,
                             height: visibleNotchHeight + 12
@@ -215,11 +218,11 @@ struct NotchLiveEditOverlay: View {
                 //    label below the height arrows so it doesn't overlap.
                 Text(readoutText)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.secondaryText)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(
-                        Capsule().fill(Color.black.opacity(0.6))
+                        Capsule().fill(theme.overlay.opacity(0.9))
                     )
                     .position(x: notchCenterX, y: visibleNotchHeight + 44)
                     .accessibilityHidden(true)
@@ -282,7 +285,7 @@ struct NotchLiveEditOverlay: View {
                                 Text(L10n.notchEditSave)
                                     .font(.system(size: 12, weight: .bold))
                             }
-                            .foregroundColor(.black)
+                            .foregroundColor(theme.inverseText)
                             .padding(.horizontal, 22)
                             .padding(.vertical, 8)
                             .background(RoundedRectangle(cornerRadius: 8).fill(neonGreen))
@@ -301,7 +304,7 @@ struct NotchLiveEditOverlay: View {
                                 Text(L10n.notchEditCancel)
                                     .font(.system(size: 12, weight: .bold))
                             }
-                            .foregroundColor(.black)
+                            .foregroundColor(theme.inverseText)
                             .padding(.horizontal, 22)
                             .padding(.vertical, 8)
                             .background(RoundedRectangle(cornerRadius: 8).fill(neonPink))
@@ -325,7 +328,7 @@ struct NotchLiveEditOverlay: View {
         } label: {
             Image(systemName: direction < 0 ? "chevron.left" : "chevron.right")
                 .font(.system(size: 14, weight: .bold))
-                .foregroundColor(.black)
+                .foregroundColor(theme.inverseText)
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(neonGreen))
                 .shadow(color: neonGreen.opacity(0.45), radius: 6)
@@ -344,7 +347,7 @@ struct NotchLiveEditOverlay: View {
         } label: {
             Image(systemName: direction > 0 ? "chevron.down" : "chevron.up")
                 .font(.system(size: 14, weight: .bold))
-                .foregroundColor(.black)
+                .foregroundColor(theme.inverseText)
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(neonGreen))
                 .shadow(color: neonGreen.opacity(0.45), radius: 6)
@@ -425,12 +428,16 @@ struct NotchLiveEditOverlay: View {
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
             }
-            .foregroundColor(enabled ? (highlight ? .black : .white) : .white.opacity(0.35))
+            .foregroundColor(
+                enabled
+                    ? (highlight ? theme.inverseText : theme.primaryText)
+                    : theme.mutedText
+            )
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 7)
-                    .fill(highlight ? neonGreen : Color.black.opacity(0.85))
+                    .fill(highlight ? neonGreen : theme.overlay.opacity(0.92))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 7)

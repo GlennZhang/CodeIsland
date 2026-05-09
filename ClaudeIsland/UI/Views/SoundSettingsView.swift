@@ -10,6 +10,9 @@ import SwiftUI
 
 struct SoundSettingsView: View {
     @ObservedObject private var soundManager = SoundManager.shared
+    private var theme: ThemeResolver {
+        ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -17,14 +20,14 @@ struct SoundSettingsView: View {
 
             Text(L10n.soundSettings)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(theme.primaryText)
 
             // MARK: - Global Mute
 
             Toggle(isOn: $soundManager.globalMute) {
                 Label(L10n.globalMute, systemImage: soundManager.globalMute ? "speaker.slash.fill" : "speaker.fill")
                     .font(.system(size: 12))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.primaryText)
             }
             .toggleStyle(.switch)
             .tint(.accentColor)
@@ -34,26 +37,26 @@ struct SoundSettingsView: View {
             HStack(spacing: 8) {
                 Image(systemName: "speaker.fill")
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(theme.secondaryText)
 
                 Slider(value: $soundManager.volume, in: 0.0...1.0)
                     .controlSize(.small)
 
                 Image(systemName: "speaker.wave.3.fill")
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(theme.secondaryText)
             }
             .disabled(soundManager.globalMute)
             .opacity(soundManager.globalMute ? 0.4 : 1.0)
 
             Divider()
-                .background(Color.white.opacity(0.08))
+                .background(theme.border.opacity(0.7))
 
             // MARK: - Per-Event Toggles
 
             Text(L10n.eventSounds)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(theme.secondaryText)
 
             VStack(spacing: 6) {
                 ForEach(SoundEvent.allCases, id: \.rawValue) { event in
@@ -75,13 +78,16 @@ private struct SoundEventRow: View {
     @ObservedObject var soundManager: SoundManager
 
     @State private var isEnabled: Bool = true
+    private var theme: ThemeResolver {
+        ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+    }
 
     var body: some View {
         HStack(spacing: 8) {
             Toggle(isOn: $isEnabled) {
                 Text(event.displayName)
                     .font(.system(size: 12))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.primaryText)
             }
             .toggleStyle(.switch)
             .controlSize(.small)
@@ -98,7 +104,7 @@ private struct SoundEventRow: View {
             } label: {
                 Image(systemName: "speaker.wave.2")
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.secondaryText)
             }
             .buttonStyle(.plain)
             .help(L10n.previewSound(event.displayName))

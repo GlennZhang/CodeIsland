@@ -8,11 +8,16 @@
 import SwiftUI
 import CoreImage.CIFilterBuiltins
 
+private func pairPhoneTheme() -> ThemeResolver {
+    ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+}
+
 // MARK: - Menu Row (inside NotchMenuView)
 
 struct PairPhoneRow: View {
     @ObservedObject var syncManager = SyncManager.shared
     @State private var isHovered = false
+    private var theme: ThemeResolver { pairPhoneTheme() }
 
     var body: some View {
         Button {
@@ -21,26 +26,26 @@ struct PairPhoneRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "iphone.radiowaves.left.and.right")
                     .font(.system(size: 12))
-                    .opacity(isHovered ? 1 : 0.6)
+                    .foregroundColor(isHovered ? theme.primaryText : theme.secondaryText)
                     .frame(width: 16)
 
                 Text("Pair iPhone")
                     .font(.system(size: 13, weight: .medium))
-                    .opacity(isHovered ? 1 : 0.7)
+                    .foregroundColor(isHovered ? theme.primaryText : theme.secondaryText)
 
                 Spacer()
 
                 if syncManager.isEnabled {
                     HStack(spacing: 3) {
-                        Circle().fill(NotchMenuView.brandLime).frame(width: 5, height: 5)
+                        Circle().fill(theme.doneColor).frame(width: 5, height: 5)
                         Text("Online")
                             .font(.system(size: 9))
-                            .foregroundColor(NotchMenuView.brandLime.opacity(0.85))
+                            .foregroundColor(theme.doneColor)
                     }
                 } else {
                     Image(systemName: "qrcode")
                         .font(.system(size: 11))
-                        .opacity(0.3)
+                        .foregroundColor(theme.mutedText)
                 }
             }
             .padding(.horizontal, 12)
@@ -48,7 +53,7 @@ struct PairPhoneRow: View {
             .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -525,6 +530,7 @@ struct PairPhonePanelView: View {
     @State private var deviceName = Host.current().localizedName ?? "Mac"
     @State private var linkedDevices: [ServerConnection.LinkedDeviceInfo] = []
     @State private var isUnlinking: String? = nil
+    private var theme: ThemeResolver { pairPhoneTheme() }
 
     private var serverUrl: String? {
         let value = SyncManager.shared.serverUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -575,10 +581,10 @@ struct PairPhonePanelView: View {
         HStack(spacing: 8) {
             Image(systemName: "iphone.radiowaves.left.and.right")
                 .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(theme.secondaryText)
             Text("Pair iPhone")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.white.opacity(0.95))
+                .foregroundColor(theme.primaryText)
             Spacer()
             statusPill
         }
@@ -589,41 +595,41 @@ struct PairPhonePanelView: View {
         switch syncManager.connectionState {
         case .connected:
             HStack(spacing: 5) {
-                Circle().fill(Color.green).frame(width: 6, height: 6)
+                Circle().fill(theme.doneColor).frame(width: 6, height: 6)
                 Text(L10n.pairPanelOnline)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.green)
+                    .foregroundColor(theme.doneColor)
             }
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(Color.green.opacity(0.12)))
+            .background(Capsule().fill(theme.doneColor.opacity(0.12)))
         case .connecting, .authenticating:
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini).scaleEffect(0.7)
                 Text(L10n.pairPanelConnecting)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.secondaryText)
             }
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .background(Capsule().fill(theme.overlay.opacity(0.18)))
         case .error(let msg):
             HStack(spacing: 5) {
-                Circle().fill(Color.red).frame(width: 6, height: 6)
+                Circle().fill(theme.errorColor).frame(width: 6, height: 6)
                 Text(msg)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(Color.red.opacity(0.9))
+                    .foregroundColor(theme.errorColor)
                     .lineLimit(1)
             }
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(Color.red.opacity(0.12)))
+            .background(Capsule().fill(theme.errorColor.opacity(0.12)))
         case .disconnected:
             HStack(spacing: 5) {
-                Circle().fill(Color.white.opacity(0.4)).frame(width: 6, height: 6)
+                Circle().fill(theme.mutedText).frame(width: 6, height: 6)
                 Text(L10n.pairPanelNotConnected)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.55))
+                    .foregroundColor(theme.mutedText)
             }
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .background(Capsule().fill(theme.overlay.opacity(0.18)))
         }
     }
 
@@ -634,21 +640,21 @@ struct PairPhonePanelView: View {
             // Big server icon
             ZStack {
                 Circle()
-                    .fill(Color.white.opacity(0.06))
+                    .fill(theme.overlay.opacity(0.16))
                     .frame(width: 72, height: 72)
                 Image(systemName: "server.rack")
                     .font(.system(size: 30, weight: .light))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.secondaryText)
             }
             .padding(.top, 4)
 
             Text(L10n.pairPanelStepServerTitle)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(.white.opacity(0.95))
+                .foregroundColor(theme.primaryText)
 
             Text(L10n.pairPanelStepServerBody)
                 .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 8)
@@ -656,15 +662,15 @@ struct PairPhonePanelView: View {
             TextField(L10n.pairPanelServerPlaceholder, text: $serverDraft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.white.opacity(0.95))
+                .foregroundColor(theme.primaryText)
                 .padding(.horizontal, 10).padding(.vertical, 9)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.white.opacity(0.06))
+                        .fill(theme.overlay.opacity(0.16))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+                        .strokeBorder(theme.border.opacity(0.9), lineWidth: 0.5)
                 )
                 .disabled(isSavingServer)
 
@@ -680,8 +686,8 @@ struct PairPhonePanelView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 9)
-                            .foregroundColor(.white.opacity(0.7))
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08)))
+                            .foregroundColor(theme.secondaryText)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(theme.overlay.opacity(0.18)))
                     }
                     .buttonStyle(.plain)
                 }
@@ -700,10 +706,10 @@ struct PairPhonePanelView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
-                    .foregroundColor(isValidDraft ? .black : .white.opacity(0.4))
+                    .foregroundColor(isValidDraft ? theme.inverseText : theme.mutedText)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(isValidDraft ? Color.white.opacity(0.92) : Color.white.opacity(0.08))
+                            .fill(isValidDraft ? theme.primaryText.opacity(0.92) : theme.overlay.opacity(0.18))
                     )
                 }
                 .buttonStyle(.plain)
@@ -712,7 +718,7 @@ struct PairPhonePanelView: View {
 
             Text(L10n.pairPanelStoredLocally)
                 .font(.system(size: 10))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(theme.mutedText)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 12)
             .padding(.top, 2)
@@ -720,11 +726,11 @@ struct PairPhonePanelView: View {
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color.white.opacity(0.04))
+                .fill(theme.overlay.opacity(0.14))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                .strokeBorder(theme.border.opacity(0.8), lineWidth: 0.5)
         )
     }
 
@@ -739,18 +745,18 @@ struct PairPhonePanelView: View {
             serverInfoRow(url: url)
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.03)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.1), lineWidth: 0.5))
+        .background(RoundedRectangle(cornerRadius: 12).fill(theme.overlay.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(theme.border.opacity(0.7), lineWidth: 0.5))
     }
 
     private var scanHeader: some View {
         VStack(spacing: 4) {
             Text(L10n.pairPanelStepScanTitle)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.white.opacity(0.95))
+                .foregroundColor(theme.primaryText)
             Text(L10n.pairPanelStepScanBody)
                 .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(theme.secondaryText)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -768,13 +774,13 @@ struct PairPhonePanelView: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
         } else {
             VStack(spacing: 8) {
-                ProgressView().tint(.white.opacity(0.5))
+                ProgressView().tint(theme.mutedText)
                 Text(L10n.pairPanelGeneratingCode)
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
             }
             .frame(width: 180, height: 180)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+            .background(RoundedRectangle(cornerRadius: 10).fill(theme.overlay.opacity(0.16)))
         }
     }
 
@@ -782,11 +788,11 @@ struct PairPhonePanelView: View {
         VStack(spacing: 4) {
             Text(L10n.pairPanelShortCodeLabel)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(theme.mutedText)
             Text(shortCode ?? "------")
                 .font(.system(size: 24, weight: .bold, design: .monospaced))
                 .tracking(4)
-                .foregroundColor(.white.opacity(shortCode == nil ? 0.3 : 0.95))
+                .foregroundColor(theme.primaryText.opacity(shortCode == nil ? 0.3 : 0.95))
         }
     }
 
@@ -795,16 +801,16 @@ struct PairPhonePanelView: View {
             HStack(spacing: 10) {
                 Image(systemName: "link")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.55))
+                    .foregroundColor(theme.secondaryText)
                     .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(L10n.pairPanelServerLabel)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(theme.mutedText)
                     Text(URL(string: url)?.host ?? url)
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.95))
+                        .foregroundColor(theme.primaryText)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -821,16 +827,16 @@ struct PairPhonePanelView: View {
                         Text(L10n.pairPanelChangeServer)
                             .font(.system(size: 11, weight: .semibold))
                     }
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(theme.primaryText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
                     .background(
                         RoundedRectangle(cornerRadius: 7)
-                            .fill(Color.white.opacity(0.12))
+                            .fill(theme.overlay.opacity(0.22))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 7)
-                            .strokeBorder(Color.white.opacity(0.2), lineWidth: 0.5)
+                            .strokeBorder(theme.border.opacity(0.9), lineWidth: 0.5)
                     )
                 }
                 .buttonStyle(.plain)
@@ -840,11 +846,11 @@ struct PairPhonePanelView: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(theme.overlay.opacity(0.16))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                    .strokeBorder(theme.border.opacity(0.8), lineWidth: 0.5)
             )
 
             HStack(spacing: 5) {
@@ -853,7 +859,7 @@ struct PairPhonePanelView: View {
                 Text("\(L10n.pairPanelDeviceLabel) · \(deviceName)")
                     .font(.system(size: 10))
             }
-            .foregroundColor(.white.opacity(0.4))
+            .foregroundColor(theme.mutedText)
             .padding(.top, 6)
         }
     }
@@ -863,11 +869,11 @@ struct PairPhonePanelView: View {
             HStack {
                 Text(L10n.pairPanelLinkedDevices)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
                 Spacer()
                 Text("\(linkedDevices.count)")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(theme.mutedText)
             }
             .padding(.horizontal, 4).padding(.bottom, 2)
 
@@ -882,10 +888,10 @@ struct PairPhonePanelView: View {
         HStack(spacing: 6) {
             Image(systemName: device.kind == "iphone" ? "iphone" : "desktopcomputer")
                 .font(.system(size: 10))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(theme.secondaryText)
             Text(device.name)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(theme.primaryText)
                 .lineLimit(1)
             Spacer()
             Button {
@@ -896,14 +902,14 @@ struct PairPhonePanelView: View {
                 } else {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12))
-                        .foregroundColor(.white.opacity(0.35))
+                        .foregroundColor(theme.mutedText)
                 }
             }
             .buttonStyle(.plain)
             .disabled(isUnlinking != nil)
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.05)))
+        .background(RoundedRectangle(cornerRadius: 6).fill(theme.overlay.opacity(0.16)))
     }
 
     private func pillContent(icon: String, text: String, trailing: String? = nil) -> some View {
@@ -914,9 +920,9 @@ struct PairPhonePanelView: View {
                 Image(systemName: trailing).font(.system(size: 8)).opacity(0.7)
             }
         }
-        .foregroundColor(.white.opacity(0.7))
+        .foregroundColor(theme.secondaryText)
         .padding(.horizontal, 9).padding(.vertical, 4)
-        .background(Capsule().fill(Color.white.opacity(0.08)))
+        .background(Capsule().fill(theme.overlay.opacity(0.18)))
     }
 
     // MARK: - Actions

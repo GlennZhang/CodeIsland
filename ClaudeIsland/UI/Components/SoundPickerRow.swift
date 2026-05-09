@@ -8,10 +8,15 @@
 import AppKit
 import SwiftUI
 
+private func soundPickerTheme() -> ThemeResolver {
+    ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+}
+
 struct SoundPickerRow: View {
     @ObservedObject var soundSelector: SoundSelector
     @State private var isHovered = false
     @State private var selectedSound: NotificationSound = AppSettings.notificationSound
+    private var theme: ThemeResolver { soundPickerTheme() }
 
     private var isExpanded: Bool {
         soundSelector.isPickerExpanded
@@ -43,18 +48,18 @@ struct SoundPickerRow: View {
 
                     Text(selectedSound.rawValue)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
                         .lineLimit(1)
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                        .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
                 )
             }
             .buttonStyle(.plain)
@@ -90,7 +95,7 @@ struct SoundPickerRow: View {
     }
 
     private var textColor: Color {
-        .white.opacity(isHovered ? 1.0 : 0.7)
+        isHovered ? theme.primaryText : theme.secondaryText
     }
 }
 
@@ -102,31 +107,32 @@ private struct SoundOptionRowInline: View {
     let action: () -> Void
 
     @State private var isHovered = false
+    private var theme: ThemeResolver { soundPickerTheme() }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(isSelected ? TerminalColors.green : Color.white.opacity(0.2))
+                    .fill(isSelected ? theme.doneColor : theme.border)
                     .frame(width: 6, height: 6)
 
                 Text(sound.rawValue)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(isHovered ? 1.0 : 0.7))
+                    .foregroundColor(isHovered ? theme.primaryText : theme.secondaryText)
 
                 Spacer()
 
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(TerminalColors.green)
+                        .foregroundColor(theme.doneColor)
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+                    .fill(isHovered ? theme.overlay.opacity(0.18) : Color.clear)
             )
         }
         .buttonStyle(.plain)

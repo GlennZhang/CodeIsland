@@ -50,9 +50,12 @@ CodeIsland-v1.6.0.zip
 
 # Release zips
 CodeIsland-v*.zip
+MioIsland-v*.zip
+MioIsland-v*.dmg
 
 # Node
 package-lock.json
+landing/node_modules/
 
 # Claude Code worktrees
 .claude/worktrees/

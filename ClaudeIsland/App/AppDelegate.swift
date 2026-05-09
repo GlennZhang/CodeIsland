@@ -79,12 +79,17 @@ import UserNotifications
 
         // Load native plugins from ~/.config/codeisland/plugins/
         NativePluginManager.shared.loadAll()
+        ThemeRegistry.shared.loadAll()
 
         // Initialize CodeLight sync (connects to server if configured)
         _ = SyncManager.shared
 
         // Stats are now handled by the external stats plugin.
         // AnalyticsCollector.shared.start() is called by the plugin's activate().
+
+        // Ad-hoc 签名升级后 TCC 权限失效检测：已配对 CodeLight 的用户才会收到通知，
+        // 只在权限"从有变没"时发通知，避免反复打扰。
+        PermissionAlertNotifier.installAndCheck()
     }
 
     private func handleScreenChange() {
@@ -102,6 +107,19 @@ import UserNotifications
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .list])
+    }
+
+    /// 处理通知点击（含按钮）。权限失效通知走 PermissionAlertNotifier.handleResponse。
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let categoryId = response.notification.request.content.categoryIdentifier
+        if categoryId == PermissionAlertNotifier.notificationCategory {
+            PermissionAlertNotifier.handleResponse(actionIdentifier: response.actionIdentifier)
+        }
+        completionHandler()
     }
 
     private func logHookHealth() {

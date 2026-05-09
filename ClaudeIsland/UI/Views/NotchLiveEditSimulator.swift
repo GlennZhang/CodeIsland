@@ -28,13 +28,16 @@ struct NotchLiveEditSimulatorView: View {
     /// External flag set by whatever overlay hosts the active
     /// gesture so we pause advancing while the user is dragging.
     var isInteracting: Bool
+    private var theme: ThemeResolver {
+        ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+    }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 2)) { context in
             let text = NotchLiveEditSimulator.fixtures[index]
             Text(text.isEmpty ? " " : text)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(theme.primaryText.opacity(0.85))
                 .lineLimit(1)
                 .onChange(of: context.date) { _, newDate in
                     // 0.8s debounce after last gesture end.

@@ -165,7 +165,36 @@ enum L10n {
     static var mascotStyleMultiMascot: String { tr("Multi Mascot", "多角色") }
     static var launchAtLogin: String { tr("Launch at Login", "开机启动") }
     static var hooks: String { tr("Hooks", "钩子") }
+    // Hook diagnostics (Advanced tab)
+    static var hookDiagTitle: String { tr("Hook Diagnostics", "Hook 诊断") }
+    static var hookDiagSubtitle: String { tr("Inspect and repair Claude and Codex hook installation.", "检查并修复 Claude 与 Codex 的 hook 安装状态。") }
+    static var hookDiagAgentClaude: String { tr("Claude Code", "Claude Code") }
+    static var hookDiagAgentCodex: String { tr("Codex", "Codex") }
+    static var hookDiagHealthy: String { tr("All good", "一切正常") }
+    static var hookDiagDisabled: String { tr("Not enabled", "未启用") }
+    static func hookDiagErrorCount(_ n: Int) -> String {
+        isChinese ? "\(n) 个错误" : "\(n) error\(n == 1 ? "" : "s")"
+    }
+    static func hookDiagNoticeCount(_ n: Int) -> String {
+        isChinese ? "\(n) 条提示" : "\(n) notice\(n == 1 ? "" : "s")"
+    }
+    static var hookDiagRecheck: String { tr("Re-check", "重新检查") }
+    static var hookDiagReinstall: String { tr("Reinstall", "重新安装") }
+    static var hookDiagUninstall: String { tr("Uninstall", "卸载") }
+    static var hookDiagRepair: String { tr("Auto-repair", "一键修复") }
+    static var hookDiagCleanupLegacy: String { tr("Clean up legacy hooks", "清理遗留 hooks") }
+    static var hookDiagCleanupLegacyHint: String { tr("Remove leftover scripts and config entries from earlier app versions (Claude Island, Code Island).", "移除 Claude Island / Code Island 旧版本遗留的脚本与配置。") }
+    static var hookDiagCodexDisabledHint: String { tr("Codex is turned off. Enable it in the General tab to install its hooks.", "Codex 未启用。请到「通用」标签打开后再安装 hook。") }
+    static var hookDiagIssueScriptMissing: String { tr("Hook script file is missing", "Hook 脚本文件缺失") }
+    static var hookDiagIssueScriptNotExecutable: String { tr("Hook script exists but is not executable", "Hook 脚本无执行权限") }
+    static var hookDiagIssueConfigMalformed: String { tr("Config file contains invalid JSON", "配置文件 JSON 损坏") }
+    static var hookDiagIssueStaleCommand: String { tr("Config references a script path that no longer exists", "配置指向的脚本路径已失效") }
+    static var hookDiagIssueOtherHooks: String { tr("Other (non-CodeIsland) hooks also installed", "检测到其他非 CodeIsland 的 hook") }
+    static var hookDiagIssueManifestMissing: String { tr("Install manifest file missing", "安装清单文件缺失") }
+    static var hookDiagCleanupDone: String { tr("Legacy hooks cleaned.", "已清理遗留 hooks。") }
+    static var hookDiagNothingToClean: String { tr("No legacy hooks found.", "没有遗留 hooks。") }
     static var codexSupport: String { tr("Codex Support", "Codex 支持") }
+    static var codexNotifyOnComplete: String { tr("Codex Notifications", "Codex 通知") }
     static var accessibility: String { tr("Accessibility", "辅助功能") }
     static var version: String { tr("Version", "版本") }
     static var checkForUpdates: String { tr("Check for Updates", "检查更新") }
@@ -175,6 +204,40 @@ enum L10n {
     static var off: String { tr("Off", "关") }
     static var enable: String { tr("Enable", "启用") }
     static var enabled: String { tr("On", "已开启") }
+
+    // MARK: - Completion Panel — phrase defaults
+    static var qrPhraseContinue: String { tr("Continue", "继续") }
+    static var qrPhraseOK: String { tr("OK", "好的") }
+    static var qrPhraseExplain: String { tr("Explain more", "解释一下") }
+    static var qrPhraseRetry: String { tr("Retry", "再试一次") }
+
+    // MARK: - Completion Panel — UI strings
+    static var qrSendFailed: String { tr("Failed to send — terminal unavailable", "发送失败，终端不可用") }
+    static var qrGoToTerminal: String { tr("Go to terminal", "前往终端") }
+    static func qrGoToTerminalNamed(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return qrGoToTerminal }
+        return tr("Go to terminal · \(trimmed)", "前往终端 · \(trimmed)")
+    }
+    static var qrAcknowledge: String { tr("Got it", "知道了") }
+    static var qrClose: String { tr("Close", "关闭") }
+    static var qrReplyPlaceholder: String { tr("Reply directly…", "直接回复…") }
+    static var qrSend: String { tr("Send", "发送") }
+    static func subagentDoneBadge(_ n: Int) -> String { tr("\(n) subagents done", "\(n) 个 subagent 完成") }
+    static var pendingToolAllow: String { tr("Allow", "允许") }
+    static var pendingToolDeny: String { tr("Deny", "拒绝") }
+    static func pendingToolAlwaysAllow(_ name: String) -> String { tr("Always Allow \(name)", "总是允许 \(name)") }
+    static var pendingToolNeedsApproval: String { tr("Needs approval", "需授权") }
+    static var pendingToolHighRiskHint: String { tr("High-risk operation — review diff in terminal", "高风险操作，请到终端查看 diff") }
+
+    // MARK: - Completion Panel — QuickReplyPhrasesEditor
+    static var qrEditorAdd: String { tr("Add phrase", "添加短语") }
+    static var qrEditorReset: String { tr("Reset to defaults", "恢复默认") }
+    static var qrEditorMaxHint: String { tr("Max 6 phrases", "最多 6 条") }
+    static var qrEditorMinHint: String { tr("Keep at least one phrase", "至少保留一条") }
+    static var qrEditorDeleteHint: String { tr("Delete", "删除") }
+    static var qrEditorSectionTitle: String { tr("Quick Reply Phrases", "快速应答短语") }
+    static var completionPanelEnabled: String { tr("Completion Panel", "任务完成面板") }
 
     // MARK: - Settings window
     static var systemSettings: String { tr("System Settings", "系统设置") }
@@ -208,6 +271,10 @@ enum L10n {
     static var testSendFailed: String { tr("Failed — check logs tab", "失败 — 请查看日志 tab") }
     static var openAccessibilitySettings: String { tr("Open Accessibility settings", "打开辅助功能设置") }
     static var openAutomationSettings: String { tr("Open Automation settings", "打开自动化设置") }
+    static var repairPermission: String { tr("Repair", "修复权限") }
+    static var repairing: String { tr("Repairing…", "修复中…") }
+    static var repairAccessibilityPermission: String { tr("Repair Accessibility permission", "修复辅助功能权限") }
+    static var repairAutomationPermission: String { tr("Repair Automation permission", "修复自动化权限") }
     static var refreshStatus: String { tr("Refresh", "刷新") }
     static var requestAutomationButton: String { tr("Request Automation permission", "请求自动化权限") }
     static var requestAutomationNoTerminal: String { tr("No supported terminal is running — start cmux/iTerm/Terminal first", "没有受支持的终端在运行 — 请先启动 cmux/iTerm/Terminal") }
@@ -447,8 +514,6 @@ enum L10n {
     static var smartSuppression: String { tr("Smart Suppression", "智能抑制") }
     static var autoCollapseOnMouseLeave: String { tr("Auto-Collapse on Leave", "离开时自动收起") }
     static var compactCollapsed: String { tr("Compact Notch", "紧凑刘海") }
-    static var autoExpandOnComplete: String { tr("Auto-Expand on Complete", "完成时自动展开") }
-
     // MARK: - Notch customization
     //
     // Deviation from spec: the spec (Section 4.5) lists these keys
@@ -465,11 +530,11 @@ enum L10n {
     // ocean, aurora, mocha, lavender, cherry) were dropped on reset.
     static var notchThemeClassic: String { tr("Classic", "经典") }
     static var notchThemeForest: String { tr("Forest", "森林") }
-    static var notchThemeNeonTokyo: String { tr("Neon Tokyo", "霓虹东京") }
+    static var notchThemeNeonTokyo: String { tr("Night Circuit", "夜行电路") }
     static var notchThemeSunset: String { tr("Sunset", "落日") }
     static var notchThemeRetroArcade: String { tr("Retro Arcade", "复古游戏机") }
     static var notchThemeHighContrast: String { tr("High Contrast", "高对比") }
-    static var notchThemeSakura: String { tr("Sakura", "樱花") }
+    static var notchThemeSakura: String { tr("Pink Mist", "粉雾") }
     static var notchHoverSpeed: String { tr("Hover Speed", "展开速度") }
     static var notchHoverInstant: String { tr("Fast", "即时") }
     static var notchHoverNormal: String { tr("1s", "1秒") }
@@ -496,14 +561,15 @@ enum L10n {
     static var notchEditReset: String { tr("Reset", "复位") }
     static var notchEditPresetDisabledTooltip: String { tr("Your device doesn't have a hardware notch", "你的设备没有硬件刘海") }
     static func notchThemeName(_ id: NotchThemeID) -> String {
-        switch id {
-        case .classic:      return notchThemeClassic
-        case .forest:       return notchThemeForest
-        case .neonTokyo:    return notchThemeNeonTokyo
-        case .sunset:       return notchThemeSunset
-        case .retroArcade:  return notchThemeRetroArcade
-        case .highContrast: return notchThemeHighContrast
-        case .sakura:       return notchThemeSakura
+        switch id.rawValue {
+        case NotchThemeID.classic.rawValue: return notchThemeClassic
+        case NotchThemeID.forest.rawValue: return notchThemeForest
+        case NotchThemeID.neonTokyo.rawValue: return notchThemeNeonTokyo
+        case NotchThemeID.sunset.rawValue: return notchThemeSunset
+        case NotchThemeID.retroArcade.rawValue: return notchThemeRetroArcade
+        case NotchThemeID.highContrast.rawValue: return notchThemeHighContrast
+        case NotchThemeID.sakura.rawValue: return notchThemeSakura
+        default: return ThemeRegistry.shared.displayName(for: id)
         }
     }
 }

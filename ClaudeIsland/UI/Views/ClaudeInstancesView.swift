@@ -20,6 +20,16 @@ struct ClaudeInstancesView: View {
     @ObservedObject private var buddyReader = BuddyReader.shared
     @State private var showBuddyCard: Bool = false
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    @ObservedObject private var hiddenStore: HiddenProjectsStore = .shared
+    /// Pending "hide group" confirmation: set when user clicks the move button.
+    @State private var pendingHide: PendingHide? = nil
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
+
+    private struct PendingHide: Identifiable {
+        let id = UUID()
+        let cwd: String
+        let name: String
+    }
 
     var body: some View {
         let sortedSnapshot = sortedInstances
@@ -189,7 +199,7 @@ struct ClaudeInstancesView: View {
                     .notchSecondaryForeground()
                     .padding(.horizontal, 14)
                     .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.white.opacity(0.06)))
+                    .background(Capsule().fill(theme.overlay.opacity(0.18)))
             }
             .buttonStyle(.plain)
         }
@@ -361,15 +371,9 @@ struct ClaudeInstancesView: View {
     /// Secondary sort: by last user message date (stable - doesn't change when agent responds)
     /// Note: approval requests stay in their date-based position to avoid layout shift
     private var sortedInstances: [SessionState] {
-        SessionFilter.filterForDisplay(visibleInstances)
-        .filter { session in
-            // Filter out short-lived ended sessions (< 30s, likely from rate limit checks)
-            if session.phase == .ended {
-                let duration = Date().timeIntervalSince(session.createdAt)
-                return duration > 30
-            }
-            return true
-        }
+        SessionFilter.filterForDisplay(sessionMonitor.instances,
+                                       isHidden: { hiddenStore.isHidden(cwd: $0) })
+
         .sorted { a, b in
             let priorityA = phasePriority(a.phase)
             let priorityB = phasePriority(b.phase)
@@ -463,16 +467,20 @@ struct ClaudeInstancesView: View {
                 ForEach(projectGroups(displayedInstances: displayedInstances)) { group in
                     ProjectGroupHeader(
                         group: group,
-                        isCollapsed: collapsedGroups.contains(group.id)
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            if collapsedGroups.contains(group.id) {
-                                collapsedGroups.remove(group.id)
-                            } else {
-                                collapsedGroups.insert(group.id)
+                        isCollapsed: collapsedGroups.contains(group.id),
+                        onToggle: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                if collapsedGroups.contains(group.id) {
+                                    collapsedGroups.remove(group.id)
+                                } else {
+                                    collapsedGroups.insert(group.id)
+                                }
                             }
+                        },
+                        onMoveRequested: {
+                            pendingHide = PendingHide(cwd: group.id, name: group.name)
                         }
-                    }
+                    )
 
                     if !collapsedGroups.contains(group.id) {
                         ForEach(group.sessions, id: \.stableId) { session in
@@ -496,6 +504,32 @@ struct ClaudeInstancesView: View {
             .padding(.vertical, 2)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .confirmationDialog(
+            pendingHide.map { L10n.isChinese ? "移除「\($0.name)」" : "Hide \"\($0.name)\"" } ?? "",
+            isPresented: Binding(
+                get: { pendingHide != nil },
+                set: { if !$0 { pendingHide = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingHide
+        ) { hide in
+            Button(L10n.isChinese ? "仅本次隐藏" : "Hide for this session") {
+                hiddenStore.dismissForSession(cwd: hide.cwd)
+                pendingHide = nil
+            }
+            Button(
+                L10n.isChinese ? "永久加入黑名单" : "Add to permanent blacklist",
+                role: .destructive
+            ) {
+                hiddenStore.blacklist(cwd: hide.cwd)
+                pendingHide = nil
+            }
+            Button(L10n.isChinese ? "取消" : "Cancel", role: .cancel) {
+                pendingHide = nil
+            }
+        } message: { hide in
+            Text(hide.cwd)
+        }
     }
 
     @ViewBuilder
@@ -641,9 +675,18 @@ struct InstanceRow: View {
         return "\(hours)h"
     }
 
+    /// Agent tag color based on session source
+    private var agentTagColor: Color {
+        if theme.isRetroArcade { return theme.agentBadgeText }
+        let tag = session.agentTag.lowercased()
+        if tag.contains("codex") { return Color(red: 1.0, green: 0.55, blue: 0.0) }
+        return Self.claudeTagFg
+    }
+
     /// Terminal tag color based on app type
     private var terminalTagColor: Color {
-        let tag = terminalTag.lowercased()
+        if theme.isRetroArcade { return theme.terminalBadgeText }
+        let tag = session.terminalTag.lowercased()
         if tag.contains("cmux") { return Color(red: 0.56, green: 0.79, blue: 0.98) }      // blue
         if tag.contains("ghostty") { return Color(red: 0.7, green: 0.6, blue: 1.0) }       // purple
         if tag.contains("zellij") { return Color(red: 0.3, green: 0.85, blue: 0.75) }     // teal
@@ -654,12 +697,15 @@ struct InstanceRow: View {
         if tag.contains("code") { return Color(red: 0.29, green: 0.67, blue: 0.96) }       // vs blue
         if tag.contains("kitty") { return Color(red: 0.94, green: 0.5, blue: 0.5) }        // salmon
         if tag.contains("claude") { return Self.claudeTagFg }                               // claude blue
-        return Color.white.opacity(0.4)
+        return theme.terminalBadgeText
     }
 
-    /// Terminal app name — auto-detected from process tree; falls back to "claude" for plain CLI sessions
-    private var terminalTag: String {
-        session.terminalApp ?? (session.isInTmux ? "tmux" : "claude")
+    private var agentBadgeFill: Color {
+        theme.isRetroArcade ? theme.agentBadgeFill : agentTagColor.opacity(0.12)
+    }
+
+    private var terminalBadgeFill: Color {
+        theme.isRetroArcade ? theme.terminalBadgeFill : terminalTagColor.opacity(0.12)
     }
 
     private var discoveredBorderColor: Color {
@@ -668,11 +714,12 @@ struct InstanceRow: View {
 
     /// Accent color based on phase (used for status dot)
     private var accentColor: Color {
+        if theme.isRetroArcade { return theme.primaryText }
         switch session.phase {
         case .processing, .compacting: return Self.cyanColor
         case .waitingForApproval, .waitingForQuestion: return Color(red: 0.96, green: 0.62, blue: 0.04) // amber
         case .waitingForInput: return Color(red: 0.29, green: 0.87, blue: 0.5)  // green
-        case .idle, .ended: return Color.white.opacity(0.2)
+        case .idle, .ended: return theme.mutedText
         }
     }
 
@@ -685,10 +732,25 @@ struct InstanceRow: View {
         return "\(session.projectName) \u{00B7} \(display)"
     }
 
+    private var previewPrefixColor: Color {
+        theme.primaryText.opacity(theme.isRetroArcade ? 1.0 : 0.82)
+    }
+
+    private var previewBodyColor: Color {
+        theme.secondaryText.opacity(theme.isRetroArcade ? 1.0 : 0.74)
+    }
+
+    private var previewMutedColor: Color {
+        theme.secondaryText.opacity(theme.isRetroArcade ? 0.9 : 0.62)
+    }
+
     @ObservedObject private var buddyReader = BuddyReader.shared
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    @AppStorage("usePixelCat") private var usePixelCat: Bool = false
+
     @State private var phaseFlash = false
     @State private var previousPhase: SessionPhase?
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     /// Whether the pending tool is AskUserQuestion with options
     private var askUserOptions: [QuestionOption]? {
@@ -792,10 +854,13 @@ struct InstanceRow: View {
                     HStack(spacing: 4) {
                         Text(titleText)
                             .notchFont(titleFontSize, weight: isActive ? .semibold : .medium)
+                            .foregroundColor(theme.primaryText)
                             .opacity(isActive ? 0.95 : 0.85)
-                            .lineLimit(isActive ? 2 : 1)
+                            .lineLimit(1)
 
                         Spacer(minLength: 0)
+
+                        sessionIdentityCluster
 
                         // Subagent badge (if active)
                         if session.subagentState.hasActiveSubagent {
@@ -832,7 +897,7 @@ struct InstanceRow: View {
                         }
 
                         // Terminal tag — colored by terminal type
-                        Text(terminalTag)
+                        Text(session.terminalTag)
                             .notchFont(8, weight: .semibold)
                             .foregroundColor(terminalTagColor)
                             .padding(.horizontal, 5)
@@ -841,6 +906,7 @@ struct InstanceRow: View {
                                 Capsule().fill(terminalTagColor.opacity(0.12))
                             )
 
+
                         // Ended tag
                         if isEnded {
                             Text(L10n.ended)
@@ -848,28 +914,14 @@ struct InstanceRow: View {
                                 .notchSecondaryForeground()
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.white.opacity(0.08)))
+                                .background(Capsule().fill(theme.subduedBadgeFill))
                         }
 
                         // Duration — colored when active, otherwise inherits palette fg
                         Text(durationText)
                             .notchFont(10, weight: isActive ? .medium : .regular)
-                            .foregroundColor(isActive ? accentColor.opacity(0.7) : nil)
+                            .foregroundColor(isActive ? accentColor.opacity(theme.isRetroArcade ? 1.0 : 0.7) : theme.secondaryText)
                             .opacity(isActive ? 1.0 : 0.3)
-
-                        // Terminal jump button — hidden for ended sessions
-                        if !isEnded {
-                            Image(systemName: "terminal")
-                                .notchFont(10)
-                                .foregroundColor(Color(red: 0.29, green: 0.87, blue: 0.5).opacity(0.7))
-                                .frame(width: 20, height: 20)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(Color(red: 0.29, green: 0.87, blue: 0.5).opacity(0.1))
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture { onFocus() }
-                        }
 
                         // Delete button (always visible so users can dismiss stuck sessions)
                         Image(systemName: "xmark")
@@ -908,21 +960,21 @@ struct InstanceRow: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(L10n.agentNeedsInput(session.agentType.displayName))
                                 .notchFont(9)
-                                .foregroundColor(TerminalColors.amber.opacity(0.7))
+                                .foregroundColor(theme.needsYouColor)
 
                             HStack(spacing: 6) {
                                 ForEach(Array(options.prefix(3).enumerated()), id: \.offset) { index, option in
                                     Text(option.label)
                                         .notchFont(9, weight: .medium)
-                                        .foregroundColor(.white.opacity(0.8))
+                                        .foregroundColor(theme.primaryText)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
                                         .background(
                                             RoundedRectangle(cornerRadius: 4)
-                                                .fill(TerminalColors.amber.opacity(0.15))
+                                                .fill(theme.needsYouColor.opacity(0.15))
                                                 .overlay(
                                                     RoundedRectangle(cornerRadius: 4)
-                                                        .strokeBorder(TerminalColors.amber.opacity(0.2), lineWidth: 0.5)
+                                                        .strokeBorder(theme.needsYouColor.opacity(0.25), lineWidth: 0.5)
                                                 )
                                         )
                                         .contentShape(Rectangle())
@@ -936,11 +988,11 @@ struct InstanceRow: View {
 
                                 Image(systemName: "terminal")
                                     .notchFont(9)
-                                    .foregroundColor(TerminalColors.amber.opacity(0.5))
+                                    .foregroundColor(theme.needsYouColor.opacity(0.75))
                                     .frame(width: 20, height: 20)
                                     .background(
                                         RoundedRectangle(cornerRadius: 4)
-                                            .fill(TerminalColors.amber.opacity(0.08))
+                                            .fill(theme.needsYouColor.opacity(0.1))
                                     )
                                     .contentShape(Rectangle())
                                     .onTapGesture { onFocus() }
@@ -970,11 +1022,12 @@ struct InstanceRow: View {
                     RoundedRectangle(cornerRadius: isActive ? 8 : 6)
                         .fill(isActive
                             ? accentColor.opacity(isHovered ? 0.1 : 0.05)
-                            : (isHovered ? Color.white.opacity(0.06) : session.isDiscovered ? session.agentType.tagColor.opacity(0.03) : Color.clear))
+                            : (isHovered ? theme.overlay.opacity(0.18) : session.isDiscovered ? session.agentType.tagColor.opacity(0.03) : Color.clear))
                         .overlay(
                             RoundedRectangle(cornerRadius: isActive ? 8 : 6)
                                 .strokeBorder(discoveredBorderColor, lineWidth: session.isDiscovered ? 0.6 : 0)
                         )
+
 
                     // Phase transition flash
                     if phaseFlash {
@@ -985,7 +1038,9 @@ struct InstanceRow: View {
                 }
             )
             .onChange(of: session.phase) { oldPhase, newPhase in
-                // Flash on phase transition
+                // Visual flash on any phase change. Keep this on phase
+                // because flashing mirrors subjective activity (including
+                // transient errors). Sound is handled separately below.
                 if oldPhase != newPhase {
                     withAnimation(.easeIn(duration: 0.15)) {
                         phaseFlash = true
@@ -993,15 +1048,71 @@ struct InstanceRow: View {
                     withAnimation(.easeOut(duration: 0.5).delay(0.15)) {
                         phaseFlash = false
                     }
-                    // Play sound for important transitions
-                    if newPhase == .waitingForInput && (oldPhase == .processing || oldPhase == .compacting) {
-                        SoundManager.shared.play(.sessionComplete)
-                    }
                 }
+            }
+            .onChange(of: session.lastStopAt) { oldStop, newStop in
+                // Play completion sound ONLY on a real Stop hook.
+                // `lastStopAt` is set exclusively in SessionStore's Stop-
+                // event handler (with a 3 s dedup window for retry
+                // cascades). Phase-based detection used to fire here but
+                // it mistakes `Notification status=waiting_for_input`
+                // (network error / idle-prompt) for a completion, which
+                // caused old already-finished sessions to replay the sound
+                // whenever the network flapped.
+                guard let new = newStop else { return }
+                if let old = oldStop, old >= new { return }
+                SoundManager.shared.play(.sessionComplete)
             }
         }
         .onHover { isHovered = $0 }
         .opacity(isEnded ? 0.4 : 1.0)
+    }
+
+    @ViewBuilder
+    private var sessionIdentityCluster: some View {
+        HStack(spacing: 6) {
+            identityChip(
+                symbol: session.agentIconSymbolName,
+                label: session.agentTag,
+                foreground: agentTagColor,
+                background: agentBadgeFill,
+                action: nil
+            )
+
+            identityChip(
+                symbol: session.terminalIconSymbolName,
+                label: session.isGraphicalTerminalSurface ? nil : session.terminalTag,
+                foreground: terminalTagColor,
+                background: terminalBadgeFill,
+                action: isEnded ? nil : onFocus
+            )
+        }
+    }
+
+    private func identityChip(
+        symbol: String,
+        label: String?,
+        foreground: Color,
+        background: Color,
+        action: (() -> Void)?
+    ) -> some View {
+        HStack(spacing: label == nil ? 0 : 4) {
+            Image(systemName: symbol)
+                .notchFont(8, weight: .semibold)
+            if let label, !label.isEmpty {
+                Text(label)
+                    .notchFont(8, weight: .semibold)
+                    .lineLimit(1)
+            }
+        }
+        .foregroundColor(foreground)
+        .padding(.horizontal, label == nil ? 6 : 7)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(background))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            action?()
+        }
     }
 
     // MARK: - AskUserQuestion Response
@@ -1084,16 +1195,16 @@ struct InstanceRow: View {
                 HStack(spacing: 2) {
                     Text("AI ")
                         .notchFont(9, weight: .medium)
-                        .foregroundColor(Self.cyanColor.opacity(0.7))
+                        .foregroundColor(previewPrefixColor)
                     if isInteractiveTool {
                         Text(L10n.needsInput)
                             .notchFont(9)
-                            .foregroundColor(Self.cyanColor.opacity(0.5))
+                            .foregroundColor(previewBodyColor)
                             .lineLimit(1)
                     } else if let input = session.pendingToolInput {
                         Text(input)
                             .notchFont(9)
-                            .foregroundColor(Self.cyanColor.opacity(0.5))
+                            .foregroundColor(previewBodyColor)
                             .lineLimit(1)
                     }
                 }
@@ -1110,17 +1221,17 @@ struct InstanceRow: View {
                             .notchSecondaryForeground()
                         Text(parts[0])
                             .notchFont(9)
-                            .opacity(0.55)
+                            .foregroundColor(previewMutedColor)
                             .lineLimit(1)
                     }
                     // Line 2: AI reply
                     HStack(spacing: 0) {
                         Text("AI ")
                             .notchFont(9, weight: .medium)
-                            .foregroundColor(Self.cyanColor.opacity(0.7))
+                            .foregroundColor(previewPrefixColor)
                         Text(parts[1])
                             .notchFont(9)
-                            .foregroundColor(Self.cyanColor.opacity(0.45))
+                            .foregroundColor(previewBodyColor)
                             .lineLimit(1)
                     }
                 } else {
@@ -1128,10 +1239,10 @@ struct InstanceRow: View {
                     HStack(spacing: 0) {
                         Text("AI ")
                             .notchFont(9, weight: .medium)
-                            .foregroundColor(Self.cyanColor.opacity(0.7))
+                            .foregroundColor(previewPrefixColor)
                         Text(summary)
                             .notchFont(9)
-                            .foregroundColor(Self.cyanColor.opacity(0.45))
+                            .foregroundColor(previewBodyColor)
                             .lineLimit(1)
                     }
                 }
@@ -1148,7 +1259,7 @@ struct InstanceRow: View {
                         if let msg = session.lastMessage {
                             Text(msg)
                                 .notchFont(9)
-                                .opacity(0.55)
+                                .foregroundColor(previewMutedColor)
                                 .lineLimit(1)
                         }
                     }
@@ -1156,11 +1267,11 @@ struct InstanceRow: View {
                     HStack(spacing: 0) {
                         Text("AI ")
                             .notchFont(9, weight: .medium)
-                            .foregroundColor(Self.cyanColor.opacity(0.7))
+                            .foregroundColor(previewPrefixColor)
                         if let toolName = session.lastToolName {
                             Text(MCPToolFormatter.formatToolName(toolName))
                                 .notchFont(9)
-                                .foregroundColor(Self.cyanColor.opacity(0.45))
+                                .foregroundColor(previewBodyColor)
                                 .lineLimit(1)
                         }
                     }
@@ -1168,11 +1279,11 @@ struct InstanceRow: View {
                     HStack(spacing: 0) {
                         Text("AI ")
                             .notchFont(9, weight: .medium)
-                            .foregroundColor(Self.cyanColor.opacity(0.7))
+                            .foregroundColor(previewPrefixColor)
                         if let msg = session.lastMessage {
                             Text(msg)
                                 .notchFont(9)
-                                .foregroundColor(Self.cyanColor.opacity(0.45))
+                                .foregroundColor(previewBodyColor)
                                 .lineLimit(1)
                         }
                     }
@@ -1182,10 +1293,10 @@ struct InstanceRow: View {
             HStack(spacing: 0) {
                 Text("AI ")
                     .notchFont(9, weight: .medium)
-                    .foregroundColor(Self.cyanColor.opacity(0.7))
+                    .foregroundColor(previewPrefixColor)
                 Text(lastMsg)
                     .notchFont(9)
-                    .foregroundColor(Self.cyanColor.opacity(0.45))
+                    .foregroundColor(previewBodyColor)
                     .lineLimit(1)
             }
         }
@@ -1198,56 +1309,84 @@ struct ProjectGroupHeader: View {
     let group: ProjectGroup
     let isCollapsed: Bool
     let onToggle: () -> Void
+    let onMoveRequested: () -> Void
 
     @State private var isHovered = false
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     var body: some View {
-        Button {
-            onToggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .notchFont(11, weight: .semibold)
+        HStack(spacing: 6) {
+            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                .notchFont(11, weight: .semibold)
+                .notchSecondaryForeground()
+                .frame(width: 12)
+
+            Text(group.name)
+                .notchFont(13, weight: .semibold)
+                .opacity(0.8)
+
+            if group.activeCount > 0 {
+                Text("\(group.activeCount) \(L10n.active)")
+                    .notchFont(11, weight: .medium)
                     .notchSecondaryForeground()
-                    .frame(width: 12)
-
-                Text(group.name)
-                    .notchFont(13, weight: .semibold)
-                    .opacity(0.8)
-
-                if group.activeCount > 0 {
-                    Text("\(group.activeCount) \(L10n.active)")
-                        .notchFont(11, weight: .medium)
-                        .notchSecondaryForeground()
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule()
-                                .fill(Color.white.opacity(0.1))
-                        )
-                } else if group.isArchived {
-                    Text(L10n.archived)
-                        .notchFont(11, weight: .medium)
-                        .notchSecondaryForeground()
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule()
-                                .fill(Color.white.opacity(0.06))
-                        )
-                }
-
-                Spacer()
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(theme.overlay.opacity(0.24))
+                    )
+            } else if group.isArchivable {
+                Text(L10n.archived)
+                    .notchFont(11, weight: .medium)
+                    .notchSecondaryForeground()
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(theme.overlay.opacity(0.18))
+                    )
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovered ? Color.white.opacity(0.04) : Color.clear)
-            )
+
+            Spacer()
+
+            // Hide-this-group affordance (visible on hover).
+            // Sibling Button (NOT nested inside the toggle's Button) so macOS
+            // SwiftUI hit-testing routes the click here, not to the row toggle.
+            if isHovered {
+                Button {
+                    onMoveRequested()
+                } label: {
+                    Image(systemName: "eye.slash")
+                        .notchFont(11, weight: .medium)
+                        .notchSecondaryForeground()
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help(L10n.isChinese ? "移除此项目" : "Hide this project")
+                .transition(.opacity)
+
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isHovered ? theme.overlay.opacity(0.16) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onToggle()
+        }
         .onHover { isHovered = $0 }
+        .contextMenu {
+            Button {
+                onMoveRequested()
+            } label: {
+                Label(L10n.isChinese ? "移除此项目" : "Hide this project",
+                      systemImage: "eye.slash")
+            }
+        }
     }
 }
 
@@ -1262,6 +1401,8 @@ struct InlineApprovalButtons: View {
     @State private var showChatButton = false
     @State private var showDenyButton = false
     @State private var showAllowButton = false
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1280,7 +1421,7 @@ struct InlineApprovalButtons: View {
                     .notchSecondaryForeground()
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Color.white.opacity(0.1))
+                    .background(theme.overlay.opacity(0.24))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -1292,10 +1433,10 @@ struct InlineApprovalButtons: View {
             } label: {
                 Text(L10n.allow)
                     .notchFont(11, weight: .medium)
-                    .foregroundColor(.black)
+                    .foregroundColor(theme.inverseText)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Color.white.opacity(0.9))
+                    .background(theme.primaryText.opacity(0.92))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -1356,6 +1497,8 @@ struct IconButton: View {
     let action: () -> Void
 
     @State private var isHovered = false
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     var body: some View {
         Button {
@@ -1367,7 +1510,7 @@ struct IconButton: View {
                 .frame(width: 24, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(isHovered ? Color.white.opacity(0.1) : Color.clear)
+                        .fill(isHovered ? theme.overlay.opacity(0.24) : Color.clear)
                 )
         }
         .buttonStyle(.plain)
@@ -1380,6 +1523,8 @@ struct IconButton: View {
 struct CompactTerminalButton: View {
     let isEnabled: Bool
     let onTap: () -> Void
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     var body: some View {
         Button {
@@ -1396,7 +1541,7 @@ struct CompactTerminalButton: View {
             .opacity(isEnabled ? 0.9 : 0.3)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(isEnabled ? Color.white.opacity(0.15) : Color.white.opacity(0.05))
+            .background(isEnabled ? theme.overlay.opacity(0.28) : theme.overlay.opacity(0.12))
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -1408,6 +1553,8 @@ struct CompactTerminalButton: View {
 struct TerminalButton: View {
     let isEnabled: Bool
     let onTap: () -> Void
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     var body: some View {
         Button {
@@ -1421,11 +1568,11 @@ struct TerminalButton: View {
                 Text(L10n.terminal)
                     .notchFont(13, weight: .medium)
             }
-            .foregroundColor(isEnabled ? .black : nil)
+            .foregroundColor(isEnabled ? theme.inverseText : nil)
             .opacity(isEnabled ? 1.0 : 0.4)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(isEnabled ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
+            .background(isEnabled ? theme.primaryText.opacity(0.95) : theme.overlay.opacity(0.18))
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -1511,6 +1658,8 @@ struct SubagentListView: View {
 struct UsageStatsBar: View {
     @ObservedObject var monitor: RateLimitMonitor
     let totalMinutes: Int
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     @AppStorage("usageWarningThreshold") private var usageWarningThreshold: Int = 90
     @State private var appear = false
@@ -1526,9 +1675,9 @@ struct UsageStatsBar: View {
 
     private func barColor(_ pct: Int) -> Color {
         let threshold = usageWarningThreshold
-        if threshold > 0 && pct >= threshold { return Color(red: 0.94, green: 0.27, blue: 0.27) }
-        if threshold > 0 && pct >= max(threshold - 20, 50) { return Color(red: 1.0, green: 0.6, blue: 0.2) }
-        return Color(red: 0.29, green: 0.87, blue: 0.5)
+        if threshold > 0 && pct >= threshold { return theme.errorColor }
+        if threshold > 0 && pct >= max(threshold - 20, 50) { return theme.needsYouColor }
+        return theme.doneColor
     }
 
     private func formatTime(_ minutes: Int) -> String {
@@ -1561,7 +1710,7 @@ struct UsageStatsBar: View {
 
                 // Divider
                 Rectangle()
-                    .fill(.white.opacity(0.08))
+                    .fill(theme.usageBorder.opacity(0.8))
                     .frame(width: 1, height: 14)
 
                 // Session time
@@ -1574,6 +1723,7 @@ struct UsageStatsBar: View {
                 // Refresh
                 Image(systemName: "arrow.clockwise")
                     .notchFont(7)
+                    .foregroundColor(theme.mutedText)
                     .opacity(monitor.isLoading ? 0.5 : 0.2)
                     .rotationEffect(.degrees(monitor.isLoading ? 360 : 0))
                     .animation(monitor.isLoading ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: monitor.isLoading)
@@ -1587,10 +1737,10 @@ struct UsageStatsBar: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.06))
+                .fill(theme.overlay.opacity(0.16))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(.white.opacity(0.06), lineWidth: 0.5)
+                        .strokeBorder(theme.usageBorder.opacity(0.7), lineWidth: 0.5)
                 )
         )
         .opacity(appear ? 1 : 0)
@@ -1627,7 +1777,8 @@ struct UsageStatsBar: View {
                     if remaining > 0 {
                         Text(formatResetShort(remaining))
                             .notchFont(7)
-                            .opacity(0.2)
+                            .foregroundColor(theme.usageText)
+                            .opacity(0.45)
                     }
                 }
             }
@@ -1635,7 +1786,7 @@ struct UsageStatsBar: View {
             // Progress bar
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(.white.opacity(0.06))
+                    .fill(theme.usageTrack.opacity(0.85))
                     .frame(width: 50, height: 3)
                 RoundedRectangle(cornerRadius: 2)
                     .fill(color)
@@ -1679,6 +1830,8 @@ struct UsageStatsBar: View {
 
 struct CodexUsageStatsBar: View {
     @ObservedObject var monitor: CodexUsageMonitor
+    @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     @AppStorage("usageWarningThreshold") private var usageWarningThreshold: Int = 90
     @State private var appear = false
@@ -1686,9 +1839,9 @@ struct CodexUsageStatsBar: View {
 
     private func barColor(_ pct: Int) -> Color {
         let threshold = usageWarningThreshold
-        if threshold > 0 && pct >= threshold { return Color(red: 0.94, green: 0.27, blue: 0.27) }
-        if threshold > 0 && pct >= max(threshold - 20, 50) { return Color(red: 1.0, green: 0.6, blue: 0.2) }
-        return Color(red: 0.29, green: 0.87, blue: 0.5)
+        if threshold > 0 && pct >= threshold { return theme.errorColor }
+        if threshold > 0 && pct >= max(threshold - 20, 50) { return theme.needsYouColor }
+        return theme.doneColor
     }
 
     var body: some View {
@@ -1700,7 +1853,7 @@ struct CodexUsageStatsBar: View {
                     .opacity(0.5)
 
                 Rectangle()
-                    .fill(.white.opacity(0.08))
+                    .fill(theme.usageBorder.opacity(0.8))
                     .frame(width: 1, height: 14)
 
                 ForEach(snapshot.windows) { window in
@@ -1713,6 +1866,7 @@ struct CodexUsageStatsBar: View {
 
                 Image(systemName: "arrow.clockwise")
                     .notchFont(7)
+                    .foregroundColor(theme.mutedText)
                     .opacity(monitor.isLoading ? 0.5 : 0.2)
                     .rotationEffect(.degrees(monitor.isLoading ? 360 : 0))
                     .animation(
@@ -1729,10 +1883,10 @@ struct CodexUsageStatsBar: View {
         .padding(.vertical, 4)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.06))
+                .fill(theme.overlay.opacity(0.16))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(.white.opacity(0.06), lineWidth: 0.5)
+                        .strokeBorder(theme.usageBorder.opacity(0.7), lineWidth: 0.5)
                 )
         )
         .opacity(appear ? 1 : 0)
@@ -1766,12 +1920,13 @@ struct CodexUsageStatsBar: View {
                 if let resetAt, resetAt.timeIntervalSinceNow > 0 {
                     Text(formatResetShort(resetAt.timeIntervalSinceNow))
                         .notchFont(7)
-                        .opacity(0.2)
+                        .foregroundColor(theme.usageText)
+                        .opacity(0.45)
                 }
             }
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(.white.opacity(0.06))
+                    .fill(theme.usageTrack.opacity(0.85))
                     .frame(width: 50, height: 3)
                 RoundedRectangle(cornerRadius: 2)
                     .fill(color)

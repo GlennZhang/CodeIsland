@@ -7,6 +7,15 @@
 
 import SwiftUI
 
+private func activeToolTheme() -> ThemeResolver {
+    ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+}
+
+private extension ThemeResolver {
+    var toolSurfaceFill: Color { overlay.opacity(isRetroArcade ? 0.2 : 0.45) }
+    var toolMutedFill: Color { overlay.opacity(isRetroArcade ? 0.12 : 0.28) }
+}
+
 // MARK: - Tool Result Content Dispatcher
 
 struct ToolResultContent: View {
@@ -131,6 +140,7 @@ struct EditResultContent: View {
     }
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             // Always use SimpleDiffView for consistent styling (no @@ headers)
             if !oldString.isEmpty || !newString.isEmpty {
@@ -140,7 +150,7 @@ struct EditResultContent: View {
             if result.userModified {
                 Text(L10n.userModified)
                     .font(.system(size: 11))
-                    .foregroundColor(.orange.opacity(0.7))
+                    .foregroundColor(theme.needsYouColor)
             }
         }
     }
@@ -152,15 +162,16 @@ struct WriteResultContent: View {
     let result: WriteResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             // Action and filename
             HStack(spacing: 4) {
                 Text(result.type == .create ? L10n.created : L10n.written)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
                 Text(result.filename)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.secondaryText)
             }
 
             // Content preview for new files
@@ -179,6 +190,7 @@ struct BashResultContent: View {
     let result: BashResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 4) {
             // Background task indicator
             if let bgId = result.backgroundTaskId {
@@ -188,14 +200,14 @@ struct BashResultContent: View {
                     Text(L10n.backgroundTask(bgId))
                         .font(.system(size: 11, design: .monospaced))
                 }
-                .foregroundColor(.blue.opacity(0.7))
+                .foregroundColor(theme.workingColor)
             }
 
             // Return code interpretation
             if let interpretation = result.returnCodeInterpretation {
                 Text(interpretation)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
             }
 
             // Stdout
@@ -208,10 +220,10 @@ struct BashResultContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.stderrLabel)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.red.opacity(0.7))
+                        .foregroundColor(theme.errorColor)
                     Text(result.stderr)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.red.opacity(0.8))
+                        .foregroundColor(theme.errorColor)
                         .lineLimit(10)
                 }
             }
@@ -220,7 +232,7 @@ struct BashResultContent: View {
             if !result.hasOutput && result.backgroundTaskId == nil && result.returnCodeInterpretation == nil {
                 Text(L10n.noContent)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
             }
         }
     }
@@ -232,6 +244,7 @@ struct GrepResultContent: View {
     let result: GrepResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             switch result.mode {
             case .filesWithMatches:
@@ -239,7 +252,7 @@ struct GrepResultContent: View {
                 if result.filenames.isEmpty {
                     Text(L10n.noMatches)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(theme.mutedText)
                 } else {
                     FileListView(files: result.filenames, limit: 10)
                 }
@@ -251,13 +264,13 @@ struct GrepResultContent: View {
                 } else {
                     Text(L10n.noMatches)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(theme.mutedText)
                 }
 
             case .count:
                 Text(L10n.filesMatched(result.numFiles))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
             }
         }
     }
@@ -269,18 +282,19 @@ struct GlobResultContent: View {
     let result: GlobResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             if result.filenames.isEmpty {
                 Text(L10n.noFiles)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
             } else {
                 FileListView(files: result.filenames, limit: 10)
 
                 if result.truncated {
                     Text(L10n.moreTruncated)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(theme.mutedText)
                 }
             }
         }
@@ -293,6 +307,7 @@ struct TodoWriteResultContent: View {
     let result: TodoWriteResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(result.newTodos.enumerated()), id: \.offset) { _, todo in
                 HStack(spacing: 6) {
@@ -304,7 +319,7 @@ struct TodoWriteResultContent: View {
 
                     Text(todo.content)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(todo.status == "completed" ? 0.4 : 0.7))
+                        .foregroundColor(todo.status == "completed" ? theme.mutedText : theme.secondaryText)
                         .strikethrough(todo.status == "completed")
                         .lineLimit(2)
                 }
@@ -321,10 +336,11 @@ struct TodoWriteResultContent: View {
     }
 
     private func todoColor(for status: String) -> Color {
+        let theme = activeToolTheme()
         switch status {
-        case "completed": return .green.opacity(0.7)
-        case "in_progress": return .orange.opacity(0.7)
-        default: return .white.opacity(0.4)
+        case "completed": return theme.doneColor
+        case "in_progress": return theme.needsYouColor
+        default: return theme.mutedText
         }
     }
 }
@@ -335,6 +351,7 @@ struct TaskResultContent: View {
     let result: TaskResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             // Status and stats
             HStack(spacing: 8) {
@@ -345,13 +362,13 @@ struct TaskResultContent: View {
                 if let duration = result.totalDurationMs {
                     Text("\(formatDuration(duration))")
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
                 }
 
                 if let tools = result.totalToolUseCount {
                     Text(L10n.tools(tools))
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
                 }
             }
 
@@ -359,18 +376,19 @@ struct TaskResultContent: View {
             if !result.content.isEmpty {
                 Text(result.content.prefix(200) + (result.content.count > 200 ? "..." : ""))
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(theme.secondaryText)
                     .lineLimit(5)
             }
         }
     }
 
     private var statusColor: Color {
+        let theme = activeToolTheme()
         switch result.status {
-        case "completed": return .green.opacity(0.7)
-        case "in_progress": return .orange.opacity(0.7)
-        case "failed", "error": return .red.opacity(0.7)
-        default: return .white.opacity(0.5)
+        case "completed": return theme.doneColor
+        case "in_progress": return theme.needsYouColor
+        case "failed", "error": return theme.errorColor
+        default: return theme.mutedText
         }
     }
 
@@ -390,16 +408,17 @@ struct WebFetchResultContent: View {
     let result: WebFetchResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             // URL and status
             HStack(spacing: 6) {
                 Text("\(result.code)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(result.code < 400 ? .green.opacity(0.7) : .red.opacity(0.7))
+                    .foregroundColor(result.code < 400 ? theme.doneColor : theme.errorColor)
 
                 Text(truncateUrl(result.url))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
                     .lineLimit(1)
             }
 
@@ -407,7 +426,7 @@ struct WebFetchResultContent: View {
             if !result.result.isEmpty {
                 Text(result.result.prefix(300) + (result.result.count > 300 ? "..." : ""))
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(theme.secondaryText)
                     .lineLimit(8)
             }
         }
@@ -427,23 +446,24 @@ struct WebSearchResultContent: View {
     let result: WebSearchResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             if result.results.isEmpty {
                 Text(L10n.noResults)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
             } else {
                 ForEach(Array(result.results.prefix(5).enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.title)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.blue.opacity(0.8))
+                            .foregroundColor(theme.workingColor)
                             .lineLimit(1)
 
                         if !item.snippet.isEmpty {
                             Text(item.snippet)
                                 .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.5))
+                                .foregroundColor(theme.mutedText)
                                 .lineLimit(2)
                         }
                     }
@@ -452,7 +472,7 @@ struct WebSearchResultContent: View {
                 if result.results.count > 5 {
                     Text(L10n.moreResults(result.results.count - 5))
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(theme.mutedText)
                 }
             }
         }
@@ -465,13 +485,14 @@ struct AskUserQuestionResultContent: View {
     let result: AskUserQuestionResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(result.questions.enumerated()), id: \.offset) { index, question in
                 VStack(alignment: .leading, spacing: 4) {
                     // Question
                     Text(question.question)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(theme.secondaryText)
 
                     // Answer
                     if let answer = result.answers["\(index)"] {
@@ -481,7 +502,7 @@ struct AskUserQuestionResultContent: View {
                             Text(answer)
                                 .font(.system(size: 11, weight: .medium))
                         }
-                        .foregroundColor(.green.opacity(0.7))
+                        .foregroundColor(theme.doneColor)
                     }
                 }
             }
@@ -495,17 +516,18 @@ struct BashOutputResultContent: View {
     let result: BashOutputResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 4) {
             // Status
             HStack(spacing: 6) {
                 Text(L10n.status(result.status))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
 
                 if let exitCode = result.exitCode {
                     Text(L10n.exitCode(exitCode))
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(exitCode == 0 ? .green.opacity(0.6) : .red.opacity(0.6))
+                        .foregroundColor(exitCode == 0 ? theme.doneColor : theme.errorColor)
                 }
             }
 
@@ -517,7 +539,7 @@ struct BashOutputResultContent: View {
             if !result.stderr.isEmpty {
                 Text(result.stderr)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.red.opacity(0.7))
+                    .foregroundColor(theme.errorColor)
                     .lineLimit(5)
             }
         }
@@ -530,14 +552,15 @@ struct KillShellResultContent: View {
     let result: KillShellResult
 
     var body: some View {
+        let theme = activeToolTheme()
         HStack(spacing: 6) {
             Image(systemName: "xmark.circle")
                 .font(.system(size: 11))
-                .foregroundColor(.red.opacity(0.6))
+                .foregroundColor(theme.errorColor)
 
             Text(result.message.isEmpty ? L10n.shellKilled(result.shellId) : result.message)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(theme.mutedText)
         }
     }
 }
@@ -548,6 +571,7 @@ struct ExitPlanModeResultContent: View {
     let result: ExitPlanModeResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 4) {
             if let path = result.filePath {
                 HStack(spacing: 4) {
@@ -556,13 +580,13 @@ struct ExitPlanModeResultContent: View {
                     Text(URL(fileURLWithPath: path).lastPathComponent)
                         .font(.system(size: 11, design: .monospaced))
                 }
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(theme.secondaryText)
             }
 
             if let plan = result.plan, !plan.isEmpty {
                 Text(plan.prefix(200) + (plan.count > 200 ? "..." : ""))
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
                     .lineLimit(6)
             }
         }
@@ -575,6 +599,7 @@ struct MCPResultContent: View {
     let result: MCPResult
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 4) {
             // Server and tool info (formatted as Title Case)
             HStack(spacing: 4) {
@@ -583,17 +608,17 @@ struct MCPResultContent: View {
                 Text("\(MCPToolFormatter.toTitleCase(result.serverName)) - \(MCPToolFormatter.toTitleCase(result.toolName))")
                     .font(.system(size: 11, design: .monospaced))
             }
-            .foregroundColor(.purple.opacity(0.7))
+            .foregroundColor(theme.thinkingColor)
 
             // Raw result (formatted as key-value pairs)
             ForEach(Array(result.rawResult.prefix(5)), id: \.key) { key, value in
                 HStack(alignment: .top, spacing: 4) {
                     Text("\(key):")
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
                     Text("\(String(describing: value).prefix(100))")
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(theme.secondaryText)
                         .lineLimit(2)
                 }
             }
@@ -607,12 +632,13 @@ struct GenericResultContent: View {
     let result: GenericResult
 
     var body: some View {
+        let theme = activeToolTheme()
         if let content = result.rawContent, !content.isEmpty {
             GenericTextContent(text: content)
         } else {
             Text(L10n.completed)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.white.opacity(0.3))
+                .foregroundColor(theme.mutedText)
         }
     }
 }
@@ -621,9 +647,10 @@ struct GenericTextContent: View {
     let text: String
 
     var body: some View {
+        let theme = activeToolTheme()
         Text(text)
             .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(.white.opacity(0.5))
+            .foregroundColor(theme.mutedText)
             .lineLimit(15)
     }
 }
@@ -655,31 +682,32 @@ struct FileCodeView: View {
     }
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 0) {
             // Filename header
             HStack(spacing: 6) {
                 Image(systemName: "doc.text")
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(theme.mutedText)
                 Text(filename)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.secondaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(Color.white.opacity(0.06))
+            .background(theme.toolSurfaceFill)
             .clipShape(RoundedCorner(radius: 6, corners: [.topLeft, .topRight]))
 
             // Top overflow indicator
             if hasLinesBefore {
                 Text("...")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 46)
                     .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.06))
+                    .background(theme.toolSurfaceFill)
             }
 
             // Code lines with line numbers
@@ -697,11 +725,11 @@ struct FileCodeView: View {
             if hasMoreAfter {
                 Text(L10n.moreLines(lines.count - maxLines))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 46)
                     .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.06))
+                    .background(theme.toolSurfaceFill)
                     .clipShape(RoundedCorner(radius: 6, corners: [.bottomLeft, .bottomRight]))
             }
         }
@@ -713,24 +741,25 @@ struct FileCodeView: View {
         let isLast: Bool
 
         var body: some View {
+            let theme = activeToolTheme()
             HStack(spacing: 0) {
                 // Line number
                 Text("\(lineNumber)")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
                     .frame(width: 28, alignment: .trailing)
                     .padding(.trailing, 8)
 
                 // Line content
                 Text(line.isEmpty ? " " : line)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(theme.secondaryText)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, 4)
             .padding(.vertical, 2)
-            .background(Color.white.opacity(0.06))
+            .background(theme.toolSurfaceFill)
             .clipShape(RoundedCorner(radius: 6, corners: isLast ? [.bottomLeft, .bottomRight] : []))
         }
     }
@@ -741,6 +770,7 @@ struct CodePreview: View {
     let maxLines: Int
 
     var body: some View {
+        let theme = activeToolTheme()
         let lines = content.components(separatedBy: "\n")
         let displayLines = Array(lines.prefix(maxLines))
         let hasMore = lines.count > maxLines
@@ -749,13 +779,13 @@ struct CodePreview: View {
             ForEach(Array(displayLines.enumerated()), id: \.offset) { _, line in
                 Text(line.isEmpty ? " " : line)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(theme.mutedText)
             }
 
             if hasMore {
                 Text(L10n.moreLines(lines.count - maxLines))
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
                     .padding(.top, 2)
             }
         }
@@ -767,15 +797,16 @@ struct FileListView: View {
     let limit: Int
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(files.prefix(limit).enumerated()), id: \.offset) { _, file in
                 HStack(spacing: 4) {
                     Image(systemName: "doc")
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(theme.mutedText)
                     Text(URL(fileURLWithPath: file).lastPathComponent)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(theme.secondaryText)
                         .lineLimit(1)
                 }
             }
@@ -783,7 +814,7 @@ struct FileListView: View {
             if files.count > limit {
                 Text(L10n.moreFiles(files.count - limit))
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
             }
         }
     }
@@ -793,13 +824,14 @@ struct DiffView: View {
     let patches: [PatchHunk]
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(patches.prefix(3).enumerated()), id: \.offset) { _, patch in
                 VStack(alignment: .leading, spacing: 1) {
                     // Hunk header
                     Text("@@ -\(patch.oldStart),\(patch.oldLines) +\(patch.newStart),\(patch.newLines) @@")
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.cyan.opacity(0.7))
+                        .foregroundColor(theme.thinkingColor)
 
                     // Lines
                     ForEach(Array(patch.lines.prefix(10).enumerated()), id: \.offset) { _, line in
@@ -809,7 +841,7 @@ struct DiffView: View {
                     if patch.lines.count > 10 {
                         Text(L10n.moreLines(patch.lines.count - 10))
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.3))
+                            .foregroundColor(theme.mutedText)
                     }
                 }
             }
@@ -817,7 +849,7 @@ struct DiffView: View {
             if patches.count > 3 {
                 Text(L10n.moreHunks(patches.count - 3))
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
             }
         }
     }
@@ -836,13 +868,14 @@ struct DiffLineView: View {
     }
 
     var body: some View {
+        let theme = activeToolTheme()
         Text(line)
             .font(.system(size: 11, design: .monospaced))
-            .foregroundColor(lineType.textColor)
+            .foregroundColor(lineType.textColor(theme: theme))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
-            .background(lineType.backgroundColor)
+            .background(lineType.backgroundColor(theme: theme))
     }
 }
 
@@ -851,18 +884,18 @@ private enum DiffLineType {
     case removed
     case context
 
-    var textColor: Color {
+    func textColor(theme: ThemeResolver) -> Color {
         switch self {
-        case .added: return Color(red: 0.4, green: 0.8, blue: 0.4)
-        case .removed: return Color(red: 0.9, green: 0.5, blue: 0.5)
-        case .context: return .white.opacity(0.5)
+        case .added: return theme.doneColor
+        case .removed: return theme.errorColor
+        case .context: return theme.mutedText
         }
     }
 
-    var backgroundColor: Color {
+    func backgroundColor(theme: ThemeResolver) -> Color {
         switch self {
-        case .added: return Color(red: 0.2, green: 0.4, blue: 0.2).opacity(0.3)
-        case .removed: return Color(red: 0.4, green: 0.2, blue: 0.2).opacity(0.3)
+        case .added: return theme.doneColor.opacity(0.14)
+        case .removed: return theme.errorColor.opacity(0.14)
         case .context: return .clear
         }
     }
@@ -962,21 +995,22 @@ struct SimpleDiffView: View {
     }
 
     var body: some View {
+        let theme = activeToolTheme()
         VStack(alignment: .leading, spacing: 0) {
             // Filename header
             if let name = filename {
                 HStack(spacing: 6) {
                     Image(systemName: "doc.text")
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
                     Text(name)
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(theme.secondaryText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
-                .background(Color.white.opacity(0.06))
+                .background(theme.toolSurfaceFill)
                 .clipShape(RoundedCorner(radius: 6, corners: [.topLeft, .topRight] as RoundedCorner.RectCorner))
             }
 
@@ -984,11 +1018,11 @@ struct SimpleDiffView: View {
             if hasLinesBefore {
                 Text("...")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 46)
                     .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.06))
+                    .background(theme.toolSurfaceFill)
                     .clipShape(RoundedCorner(radius: 6, corners: filename == nil ? [.topLeft, .topRight] as RoundedCorner.RectCorner : [] as RoundedCorner.RectCorner))
             }
 
@@ -1009,11 +1043,11 @@ struct SimpleDiffView: View {
             if hasMoreChanges {
                 Text("...")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(theme.mutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 46)
                     .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.06))
+                    .background(theme.toolSurfaceFill)
                     .clipShape(RoundedCorner(radius: 6, corners: [.bottomLeft, .bottomRight] as RoundedCorner.RectCorner))
             }
         }
@@ -1044,30 +1078,31 @@ struct SimpleDiffView: View {
         }
 
         var body: some View {
+            let theme = activeToolTheme()
             HStack(spacing: 0) {
                 // Line number
                 Text("\(lineNumber)")
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(type.textColor.opacity(0.6))
+                    .foregroundColor(type.textColor(theme: theme).opacity(0.7))
                     .frame(width: 28, alignment: .trailing)
                     .padding(.trailing, 4)
 
                 // +/- indicator
                 Text(type == .added ? "+" : "-")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(type.textColor)
+                    .foregroundColor(type.textColor(theme: theme))
                     .frame(width: 14)
 
                 // Line content
                 Text(line.isEmpty ? " " : line)
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(type.textColor)
+                    .foregroundColor(type.textColor(theme: theme))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, 4)
             .padding(.vertical, 2)
-            .background(type.backgroundColor)
+            .background(type.backgroundColor(theme: theme))
             .clipShape(RoundedCorner(radius: 6, corners: corners))
         }
     }

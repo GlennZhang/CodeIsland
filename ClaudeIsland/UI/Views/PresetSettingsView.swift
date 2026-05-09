@@ -8,10 +8,15 @@
 
 import SwiftUI
 
+private func presetTheme() -> ThemeResolver {
+    ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+}
+
 // MARK: - Menu Row (inside NotchMenuView)
 
 struct PresetSettingsRow: View {
     @State private var isHovered = false
+    private var theme: ThemeResolver { presetTheme() }
 
     var body: some View {
         Button {
@@ -20,24 +25,24 @@ struct PresetSettingsRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "wand.and.stars")
                     .font(.system(size: 12))
-                    .opacity(isHovered ? 1 : 0.6)
+                    .foregroundColor(isHovered ? theme.primaryText : theme.secondaryText)
                     .frame(width: 16)
 
                 Text("Launch Presets")
                     .font(.system(size: 13, weight: .medium))
-                    .opacity(isHovered ? 1 : 0.7)
+                    .foregroundColor(isHovered ? theme.primaryText : theme.secondaryText)
 
                 Spacer()
 
                 Text("\(PresetStore.shared.presets.count)")
                     .font(.system(size: 10))
-                    .opacity(0.4)
+                    .foregroundColor(theme.mutedText)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -96,6 +101,7 @@ final class PresetSettingsWindow {
 
 private struct PresetSettingsContentView: View {
     let onClose: () -> Void
+    private var theme: ThemeResolver { presetTheme() }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,30 +109,30 @@ private struct PresetSettingsContentView: View {
             HStack {
                 Text("Launch Presets")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(theme.primaryText)
                 Spacer()
                 Button {
                     onClose()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
                 }
                 .buttonStyle(.plain)
             }
             .padding(20)
-            Divider().background(Color.white.opacity(0.1))
+            Divider().background(theme.border.opacity(0.7))
             PresetsListContent(textStyle: .darkOnLight(false))
         }
         .frame(width: 460, height: 520)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.5), radius: 30, y: 10)
+                .fill(theme.background)
+                .shadow(color: theme.overlay.opacity(0.35), radius: 30, y: 10)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20)
-                .strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
+                .strokeBorder(theme.border.opacity(0.8), lineWidth: 0.5)
         )
     }
 }
@@ -233,6 +239,7 @@ private struct PresetRow: View {
     var primaryColor: Color = .white
     let onEdit: () -> Void
     let onDelete: () -> Void
+    private var theme: ThemeResolver { presetTheme() }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -263,7 +270,7 @@ private struct PresetRow: View {
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .font(.system(size: 12))
-                    .foregroundColor(Color(red: 0.75, green: 0.15, blue: 0.15))
+                    .foregroundColor(theme.errorColor)
             }
             .buttonStyle(.plain)
         }
@@ -271,7 +278,7 @@ private struct PresetRow: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(primaryColor.opacity(0.08))
+                .fill(theme.overlay.opacity(0.18))
         )
     }
 }

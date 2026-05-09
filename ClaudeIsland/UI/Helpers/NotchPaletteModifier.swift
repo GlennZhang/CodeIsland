@@ -28,9 +28,10 @@ struct NotchPaletteModifier: ViewModifier {
     @ObservedObject var store: NotchCustomizationStore = .shared
 
     func body(content: Content) -> some View {
+        let theme = ThemeResolver(theme: store.customization.theme)
         content
-            .foregroundStyle(NotchPalette.for(store.customization.theme).fg)
-            .background(NotchPalette.for(store.customization.theme).bg)
+            .foregroundStyle(theme.primaryText)
+            .background(theme.background)
             .animation(.easeInOut(duration: 0.3), value: store.customization.theme)
     }
 }
@@ -39,8 +40,9 @@ struct NotchSecondaryForegroundModifier: ViewModifier {
     @ObservedObject var store: NotchCustomizationStore = .shared
 
     func body(content: Content) -> some View {
+        let theme = ThemeResolver(theme: store.customization.theme)
         content
-            .foregroundStyle(NotchPalette.for(store.customization.theme).secondaryFg)
+            .foregroundStyle(theme.secondaryText)
             .animation(.easeInOut(duration: 0.3), value: store.customization.theme)
     }
 }

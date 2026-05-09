@@ -10,16 +10,15 @@ import Combine
 import SwiftUI
 import ServiceManagement
 
+private func menuTheme() -> ThemeResolver {
+    ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+}
+
 // MARK: - NotchMenuView
 
 struct NotchMenuView: View {
     @ObservedObject var viewModel: NotchViewModel
-
-    /// Brand lime (#CAFF00) — used as the full surface fill for the Pair
-    /// phone popup and the System Settings window, and as a sparing accent
-    /// (toggle dots, star button, daily card highlights) inside the notch
-    /// menu which still uses a dark theme to blend with the notch shell.
-    static let brandLime = Color(red: 0xCA/255, green: 0xFF/255, blue: 0x00/255)
+    private var theme: ThemeResolver { menuTheme() }
 
     @ObservedObject private var screenSelector = ScreenSelector.shared
     @ObservedObject private var soundSelector = SoundSelector.shared
@@ -107,7 +106,7 @@ struct NotchMenuView: View {
                         Text(L10n.back)
                             .font(.system(size: 11, weight: .medium))
                     }
-                    .opacity(0.6)
+                    .foregroundColor(theme.secondaryText)
                 }
                 .buttonStyle(.plain)
 
@@ -118,7 +117,7 @@ struct NotchMenuView: View {
                 } label: {
                     Text(L10n.quit)
                         .font(.system(size: 10))
-                        .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4).opacity(0.7))
+                        .foregroundColor(theme.errorColor.opacity(0.8))
                 }
                 .buttonStyle(.plain)
             }
@@ -237,6 +236,7 @@ struct PluginMenuRow: View {
     let plugin: NativePluginManager.LoadedPlugin
     let viewModel: NotchViewModel
     @State private var isHovered = false
+    private var theme: ThemeResolver { menuTheme() }
 
     var body: some View {
         Button {
@@ -245,24 +245,24 @@ struct PluginMenuRow: View {
             HStack(spacing: 10) {
                 Image(systemName: plugin.icon)
                     .font(.system(size: 12))
-                    .opacity(isHovered ? 1 : 0.6)
+                    .foregroundColor(isHovered ? theme.primaryText : theme.secondaryText)
                     .frame(width: 16)
 
                 Text(plugin.name)
                     .font(.system(size: 13, weight: .medium))
-                    .opacity(isHovered ? 1 : 0.7)
+                    .foregroundColor(isHovered ? theme.primaryText : theme.secondaryText)
 
                 Spacer()
 
                 Text("v\(plugin.version)")
                     .font(.system(size: 9))
-                    .opacity(0.3)
+                    .foregroundColor(theme.mutedText)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -273,6 +273,7 @@ struct PluginMenuRow: View {
 // MARK: - Version Row
 
 struct VersionRow: View {
+    private var theme: ThemeResolver { menuTheme() }
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -283,18 +284,18 @@ struct VersionRow: View {
         HStack(spacing: 10) {
             Image(systemName: "info.circle")
                 .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(theme.secondaryText)
                 .frame(width: 16)
 
             Text(L10n.version)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(theme.secondaryText)
 
             Spacer()
 
             Text(appVersion)
                 .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(theme.mutedText)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -308,6 +309,7 @@ struct AccessibilityRow: View {
 
     @State private var isHovered = false
     @State private var refreshTrigger = false
+    private var theme: ThemeResolver { menuTheme() }
 
     private var currentlyEnabled: Bool {
         // Re-check on each render when refreshTrigger changes
@@ -330,22 +332,22 @@ struct AccessibilityRow: View {
 
             if isEnabled {
                 Circle()
-                    .fill(TerminalColors.green)
+                    .fill(theme.doneColor)
                     .frame(width: 6, height: 6)
 
                 Text(L10n.enabled)
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(theme.mutedText)
             } else {
                 Button(action: openAccessibilitySettings) {
                     Text(L10n.enable)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.black)
+                        .foregroundColor(theme.inverseText)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(Color.white)
+                                .fill(theme.doneColor)
                         )
                 }
                 .buttonStyle(.plain)
@@ -355,7 +357,7 @@ struct AccessibilityRow: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
         )
         .onHover { isHovered = $0 }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -364,7 +366,7 @@ struct AccessibilityRow: View {
     }
 
     private var textColor: Color {
-        .white.opacity(isHovered ? 1.0 : 0.7)
+        isHovered ? theme.primaryText : theme.secondaryText
     }
 
     private func openAccessibilitySettings() {
@@ -381,6 +383,7 @@ struct MenuRow: View {
     let action: () -> Void
 
     @State private var isHovered = false
+    private var theme: ThemeResolver { menuTheme() }
 
     var body: some View {
         Button(action: action) {
@@ -400,7 +403,7 @@ struct MenuRow: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -409,9 +412,9 @@ struct MenuRow: View {
 
     private var textColor: Color {
         if isDestructive {
-            return Color(red: 1.0, green: 0.4, blue: 0.4)
+            return theme.errorColor
         }
-        return .white.opacity(isHovered ? 1.0 : 0.7)
+        return isHovered ? theme.primaryText : theme.secondaryText
     }
 }
 
@@ -422,6 +425,7 @@ struct MenuToggleRow: View {
     let action: () -> Void
 
     @State private var isHovered = false
+    private var theme: ThemeResolver { menuTheme() }
 
     var body: some View {
         Button(action: action) {
@@ -438,18 +442,18 @@ struct MenuToggleRow: View {
                 Spacer()
 
                 Circle()
-                    .fill(isOn ? TerminalColors.green : Color.white.opacity(0.3))
+                    .fill(isOn ? theme.doneColor : theme.mutedText.opacity(0.7))
                     .frame(width: 6, height: 6)
 
                 Text(isOn ? L10n.on : L10n.off)
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(theme.mutedText)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -457,7 +461,7 @@ struct MenuToggleRow: View {
     }
 
     private var textColor: Color {
-        .white.opacity(isHovered ? 1.0 : 0.7)
+        isHovered ? theme.primaryText : theme.secondaryText
     }
 }
 
@@ -467,6 +471,7 @@ struct LanguageRow: View {
     @State private var isExpanded = false
     @State private var isHovered = false
     @State private var current = L10n.appLanguage
+    private var theme: ThemeResolver { menuTheme() }
 
     private let options: [(id: String, label: String)] = [
         ("auto", "Auto / 自动"),
@@ -495,17 +500,17 @@ struct LanguageRow: View {
 
                     Text(L10n.currentLanguageLabel)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(theme.mutedText)
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 9))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(theme.mutedText)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                        .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
                 )
             }
             .buttonStyle(.plain)
@@ -521,17 +526,17 @@ struct LanguageRow: View {
                             HStack {
                                 Text(option.label)
                                     .font(.system(size: 12))
-                                    .foregroundColor(.white.opacity(0.7))
+                                    .foregroundColor(theme.secondaryText)
                                 Spacer()
                                 if current == option.id {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 10, weight: .bold))
-                                        .foregroundColor(.green)
+                                        .foregroundColor(theme.doneColor)
                                 }
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.03))
+                            .background(theme.overlay.opacity(0.12))
                         }
                         .buttonStyle(.plain)
                     }
@@ -542,7 +547,7 @@ struct LanguageRow: View {
     }
 
     private var textColor: Color {
-        .white.opacity(isHovered ? 1.0 : 0.7)
+        isHovered ? theme.primaryText : theme.secondaryText
     }
 }
 
@@ -551,6 +556,7 @@ struct LanguageRow: View {
 struct ThresholdPickerRow: View {
     @Binding var threshold: Int
     @State private var isHovered = false
+    private var theme: ThemeResolver { menuTheme() }
 
     private let options: [(value: Int, label: String)] = [
         (70, "70%"),
@@ -579,12 +585,12 @@ struct ThresholdPickerRow: View {
                     } label: {
                         Text(option.label)
                             .font(.system(size: 10, weight: threshold == option.value ? .bold : .regular))
-                            .foregroundColor(threshold == option.value ? .white : .white.opacity(0.4))
+                            .foregroundColor(threshold == option.value ? theme.primaryText : theme.mutedText)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
                             .background(
                                 RoundedRectangle(cornerRadius: 4)
-                                    .fill(threshold == option.value ? Color.white.opacity(0.15) : Color.clear)
+                                    .fill(threshold == option.value ? theme.overlay.opacity(0.28) : Color.clear)
                             )
                     }
                     .buttonStyle(.plain)
@@ -595,12 +601,12 @@ struct ThresholdPickerRow: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                .fill(isHovered ? theme.overlay.opacity(0.22) : Color.clear)
         )
         .onHover { isHovered = $0 }
     }
 
     private var textColor: Color {
-        .white.opacity(isHovered ? 1.0 : 0.7)
+        isHovered ? theme.primaryText : theme.secondaryText
     }
 }

@@ -14,6 +14,9 @@ struct ActionButton: View {
     let action: () -> Void
 
     @State private var isHovered = false
+    private var theme: ThemeResolver {
+        ThemeResolver(theme: NotchCustomizationStore.shared.customization.theme)
+    }
 
     var body: some View {
         Button(action: action) {
@@ -23,7 +26,7 @@ struct ActionButton: View {
                 Text(title)
                     .font(.system(size: 10, weight: .semibold, design: .rounded))
             }
-            .foregroundColor(isHovered ? .black : color)
+            .foregroundColor(isHovered ? theme.inverseText : color)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(

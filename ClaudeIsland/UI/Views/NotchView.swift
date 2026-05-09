@@ -35,6 +35,8 @@ struct NotchView: View {
     @AppStorage("autoCollapseOnMouseLeave") private var autoCollapseOnMouseLeave: Bool = true
     @AppStorage("compactCollapsed") private var compactCollapsed: Bool = false
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    @ObservedObject private var controller = CompletionPanelController.shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     @Namespace private var activityNamespace
 
@@ -344,6 +346,12 @@ struct NotchView: View {
                     }
                     .simultaneousGesture(
                         TapGesture().onEnded {
+                            // Sticky Completion Panel: clicking the notch bar dismisses it.
+                            if case .completion(let entry) = viewModel.contentType,
+                               entry.variant.isSticky {
+                                controller.dismissFront(stableId: entry.stableId)
+                                return
+                            }
                             if viewModel.status != .opened {
                                 viewModel.notchOpen(reason: .click)
                             }
@@ -379,6 +387,26 @@ struct NotchView: View {
             // first appearance so the hit-test region matches the
             // visible notch from the very first frame.
             viewModel.currentExpansionWidth = expansionWidth
+        }
+        .onChange(of: controller.state.front) { _, front in
+            DebugLogger.log("CP/onChange", "front=\(front?.stableId.prefix(8) ?? "nil") variantId=\(front?.id.uuidString.prefix(8) ?? "nil") contentType=\(viewModel.contentType.id)")
+            if let front {
+                if case .completion(let current) = viewModel.contentType,
+                   current.stableId == front.stableId,
+                   current.id == front.id {
+                    DebugLogger.log("CP/onChange", "in-place refresh session=\(front.stableId.prefix(8)) variantId=\(front.id.uuidString.prefix(8))")
+                    viewModel.contentType = .completion(front)
+                    return
+                }
+                viewModel.contentType = .completion(front)
+                viewModel.notchOpen(reason: .notification)
+            } else if case .completion = viewModel.contentType {
+                // Spec §1: instances list / chat = manual user action only.
+                // After Completion Panel auto-dismisses, close the notch
+                // entirely — do NOT auto-show instances list (that's the
+                // exact regression the user flagged at smoke time).
+                viewModel.notchClose()
+            }
         }
     }
 
@@ -466,7 +494,7 @@ struct NotchView: View {
         HStack(spacing: 0) {
             HStack(spacing: 4) {
                 Circle()
-                    .fill(Color.white.opacity(0.3))
+                    .fill(theme.idleColor.opacity(theme.isRetroArcade ? 0.75 : 0.3))
                     .frame(width: 6, height: 6)
                 if notchStore.customization.showBuddy {
                     PixelCharacterView(state: .idle)
@@ -530,6 +558,8 @@ struct NotchView: View {
                 )
             case .plugin(let pluginId):
                 PluginContentView(pluginId: pluginId, viewModel: viewModel)
+            case .completion(let entry):
+                CompletionPanelView(entry: entry)
             }
 
             // Plugin footer slot (e.g. mini player bar) — only if plugins provide one
@@ -583,20 +613,18 @@ struct NotchView: View {
         let currentIds = Set(sessions.map { $0.stableId })
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
-        if !newPendingIds.isEmpty &&
-           viewModel.status == .closed {
-            // Smart suppression: don't expand if user's terminal is frontmost
+        if !newPendingIds.isEmpty && viewModel.status == .closed {
             let termFront = TerminalVisibilityDetector.isTerminalFrontmost()
-            DebugLogger.log("Suppress", "[pending] newIds=\(newPendingIds.count) termFront=\(termFront)")
             if smartSuppression && termFront {
                 DebugLogger.log("Suppress", "[pending] Suppressed — terminal frontmost")
             } else {
-                DebugLogger.log("Suppress", "[pending] Opening notification")
-                viewModel.notchOpen(reason: .notification)
-                // If the pending session is AskUserQuestion, show the question UI
+                // Only AskUserQuestion goes to the legacy question UI.
+                // Non-AskUserQuestion pending tools are handled by
+                // CompletionPanelController via its SessionStore sink.
                 if let askSession = sessions.first(where: {
                     newPendingIds.contains($0.stableId) && $0.pendingToolName == "AskUserQuestion"
                 }) {
+                    viewModel.notchOpen(reason: .notification)
                     viewModel.showQuestion(for: askSession)
                 }
             }
@@ -628,18 +656,35 @@ struct NotchView: View {
             // Get the sessions that just entered waitingForInput
             let newlyWaitingSessions = waitingForInputSessions.filter { newWaitingIds.contains($0.stableId) }
 
-            // Play notification sound if the session is not actively focused
-            if let soundName = AppSettings.notificationSound.soundName {
-                // Check if we should play sound (async check for tmux pane focus)
-                Task {
-                    let shouldPlaySound = await shouldPlayNotificationSound(for: newlyWaitingSessions)
-                    if shouldPlaySound {
-                        await MainActor.run {
-                            NSSound(named: soundName)?.play()
+            // Q1: Codex sessions stay silent (no bounce / no sound / no auto-popup)
+            // unless the user explicitly opts in. Reason: Codex turns are short and
+            // claude-mem–like short-lived child sessions end up triggering constant
+            // feedback for things the user didn't initiate.
+            //
+            // Q4 safety net: sessions with no user-visible content at all
+            // (no tool calls, no messages, no summary) are also suppressed.
+            // Catches claude-mem plugin-spawned Claude children that fire
+            // SessionStart + Stop within a second, and any future event
+            // source that delivers malformed / empty hook payloads.
+            let codexNotifyOnComplete = UserDefaults.standard.object(forKey: "codexNotifyOnComplete") as? Bool ?? false
+            let notifiableSessions = newlyWaitingSessions.filter { session in
+                guard !session.hasNoContentYet else { return false }
+                return session.codexTranscriptPath == nil || codexNotifyOnComplete
+            }
+
+            if !notifiableSessions.isEmpty {
+                // Play notification sound if the session is not actively focused
+                if let soundName = AppSettings.notificationSound.soundName {
+                    // Check if we should play sound (async check for tmux pane focus)
+                    Task {
+                        let shouldPlaySound = await shouldPlayNotificationSound(for: notifiableSessions)
+                        if shouldPlaySound {
+                            await MainActor.run {
+                                NSSound(named: soundName)?.play()
+                            }
                         }
                     }
                 }
-            }
 
             // Trigger bounce animation to get user's attention
             DispatchQueue.main.async {
@@ -683,6 +728,7 @@ struct NotchView: View {
                     }
                 }
             }
+        }
 
             // Schedule hiding the checkmark after 30 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [self] in
@@ -842,22 +888,24 @@ struct CollapsedNotchContent: View {
     private func dotColor(for phase: SessionPhase) -> Color {
         switch phase {
         case .processing, .compacting:
-            return TerminalColors.green
+            return theme.workingColor
         case .waitingForApproval, .waitingForQuestion:
-            return TerminalColors.amber
+            return theme.needsYouColor
         case .waitingForInput:
-            return TerminalColors.blue
+            return theme.doneColor
         case .idle, .ended:
-            return Color.white.opacity(0.25)
+            return theme.mutedText.opacity(theme.isRetroArcade ? 0.55 : 0.25)
         }
     }
 
-    /// Group sessions by project (cwd), preserving order
+    /// Group sessions by project (cwd), preserving order.
+    /// Skips ended and user-hidden cwds.
     private var sessionsByProject: [[SessionState]] {
         var groups: [[SessionState]] = []
         var seen: [String: Int] = [:]  // cwd -> group index
 
         for session in sessions where session.phase != .ended {
+            if HiddenProjectsStore.shared.isHidden(cwd: session.cwd) { continue }
             if let idx = seen[session.cwd] {
                 groups[idx].append(session)
             } else {
@@ -884,6 +932,8 @@ struct CollapsedNotchContent: View {
     @State private var pulsePhase: Bool = false
     @ObservedObject private var buddyReader = BuddyReader.shared
     @ObservedObject private var notchStore: NotchCustomizationStore = .shared
+    @ObservedObject private var hiddenStore: HiddenProjectsStore = .shared
+    private var theme: ThemeResolver { ThemeResolver(theme: notchStore.customization.theme) }
 
     // MARK: - Unattended Task Alert
 
@@ -918,9 +968,9 @@ struct CollapsedNotchContent: View {
     /// Override status dot color when unattended
     private var effectiveStatusDotColor: Color {
         if isUrgentlyUnattended {
-            return Color(red: 0.94, green: 0.27, blue: 0.27) // red
+            return theme.errorColor
         } else if isUnattended {
-            return Color(red: 1.0, green: 0.6, blue: 0.2)  // orange
+            return theme.needsYouColor
         }
         return statusDotColor
     }
@@ -934,12 +984,12 @@ struct CollapsedNotchContent: View {
     /// invisible on light-bg themes (sunset / sakura / retroArcade).
     private var statusDotColor: Color {
         switch mostUrgentState {
-        case .working: return Color(red: 0.4, green: 0.91, blue: 0.98) // cyan
-        case .needsYou: return Color(red: 0.96, green: 0.62, blue: 0.04) // amber
-        case .error: return Color(red: 0.94, green: 0.27, blue: 0.27) // red
-        case .done: return Color(red: 0.29, green: 0.87, blue: 0.5) // green
-        case .thinking: return Color(red: 0.7, green: 0.6, blue: 1.0) // purple
-        case .idle: return NotchPalette.for(notchStore.customization.theme).accent
+        case .working: return theme.workingColor
+        case .needsYou: return theme.needsYouColor
+        case .error: return theme.errorColor
+        case .done: return theme.doneColor
+        case .thinking: return theme.thinkingColor
+        case .idle: return theme.idleColor
         }
     }
 
@@ -1158,19 +1208,22 @@ struct CollapsedNotchContent: View {
 
     /// Status text gradient based on state
     private var statusGradient: LinearGradient {
+        if theme.isRetroArcade {
+            return LinearGradient(colors: [theme.primaryText, theme.primaryText], startPoint: .leading, endPoint: .trailing)
+        }
         switch mostUrgentState {
         case .working:
-            return LinearGradient(colors: [Color(red:0.3,green:0.9,blue:0.95), Color(red:0.2,green:0.95,blue:0.5)], startPoint: .leading, endPoint: .trailing)
+            return LinearGradient(colors: [theme.workingColor, theme.doneColor], startPoint: .leading, endPoint: .trailing)
         case .needsYou:
-            return LinearGradient(colors: [Color(red:1.0,green:0.75,blue:0.3), Color(red:1.0,green:0.55,blue:0.2)], startPoint: .leading, endPoint: .trailing)
+            return LinearGradient(colors: [theme.needsYouColor, theme.needsYouColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
         case .error:
-            return LinearGradient(colors: [Color(red:1.0,green:0.4,blue:0.4), Color(red:0.9,green:0.2,blue:0.2)], startPoint: .leading, endPoint: .trailing)
+            return LinearGradient(colors: [theme.errorColor, theme.errorColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
         case .thinking:
-            return LinearGradient(colors: [Color(red:0.7,green:0.6,blue:1.0), Color(red:0.5,green:0.8,blue:1.0)], startPoint: .leading, endPoint: .trailing)
+            return LinearGradient(colors: [theme.thinkingColor, theme.workingColor], startPoint: .leading, endPoint: .trailing)
         case .done:
-            return LinearGradient(colors: [Color(red:0.3,green:0.87,blue:0.5), Color(red:0.2,green:0.8,blue:0.7)], startPoint: .leading, endPoint: .trailing)
+            return LinearGradient(colors: [theme.doneColor, theme.doneColor.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
         case .idle:
-            return LinearGradient(colors: [.white.opacity(0.5), .white.opacity(0.3)], startPoint: .leading, endPoint: .trailing)
+            return LinearGradient(colors: [theme.secondaryText, theme.secondaryText], startPoint: .leading, endPoint: .trailing)
         }
     }
 
@@ -1178,13 +1231,14 @@ struct CollapsedNotchContent: View {
     /// so the "×1" pill also reflects the active theme at rest, instead of
     /// a hardcoded 30%-white that vanishes on light-bg themes.
     private var badgeColor: Color {
+        if theme.isRetroArcade { return theme.primaryText }
         switch mostUrgentState {
-        case .needsYou: return TerminalColors.amber
-        case .error: return Color(red: 0.94, green: 0.27, blue: 0.27)
-        case .working: return TerminalColors.green
-        case .thinking: return Color(red: 0.65, green: 0.55, blue: 0.98)
-        case .done: return TerminalColors.blue
-        case .idle: return NotchPalette.for(notchStore.customization.theme).accent
+        case .needsYou: return theme.needsYouColor
+        case .error: return theme.errorColor
+        case .working: return theme.workingColor
+        case .thinking: return theme.thinkingColor
+        case .done: return theme.doneColor
+        case .idle: return theme.idleColor
         }
     }
 

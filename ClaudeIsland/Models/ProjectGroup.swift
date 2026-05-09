@@ -16,7 +16,7 @@ struct ProjectGroup: Identifiable {
         sessions.filter { $0.phase != .idle && $0.phase != .ended }.count
     }
 
-    var isArchived: Bool {
+    var isArchivable: Bool {
         sessions.allSatisfy(\.isArchivedForDefaultList)
     }
 
