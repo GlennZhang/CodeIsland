@@ -50,6 +50,12 @@ struct ClaudeInstancesView: View {
                         // Plugin header buttons
                         PluginHeaderButtons(viewModel: viewModel)
 
+                        if sortedSnapshot.contains(where: { $0.phase == .ended }) {
+                            HeaderIconButton(icon: "broom", hoverColor: theme.needsYouColor) {
+                                sessionMonitor.clearEndedSessions()
+                            }
+                        }
+
                         HeaderIconButton(icon: "gearshape", hoverColor: Color(red: 0xCA/255, green: 0xFF/255, blue: 0x00/255)) {
                             SystemSettingsWindow.shared.show()
                         }
@@ -427,7 +433,7 @@ struct ClaudeInstancesView: View {
                 ForEach(Array(displayedInstances.enumerated()), id: \.element.stableId) { index, session in
                     InstanceRow(
                         session: session,
-                        animatedIcon: !viewModel.isInstancesExpanded,
+                        animatedIcon: true,
                         onFocus: { focusSession(session) },
                         onChat: { openChat(session) },
                         onArchive: { archiveSession(session) },
@@ -486,7 +492,7 @@ struct ClaudeInstancesView: View {
                         ForEach(group.sessions, id: \.stableId) { session in
                             InstanceRow(
                                 session: session,
-                                animatedIcon: !viewModel.isInstancesExpanded,
+                                animatedIcon: true,
                                 onFocus: { focusSession(session) },
                                 onChat: { openChat(session) },
                                 onArchive: { archiveSession(session) },

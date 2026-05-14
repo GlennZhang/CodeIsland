@@ -39,7 +39,12 @@ enum SessionFilter {
             // Rate-limit noise: short-lived sessions that ended quickly
             if session.phase == .ended {
                 let duration = Date().timeIntervalSince(session.createdAt)
-                return duration >= 30
+                guard duration >= 30 else { return false }
+                // Auto-hide ended sessions after 5 minutes
+                let endedTime = session.endedAt ?? session.lastActivity
+                if Date().timeIntervalSince(endedTime) > 300 {
+                    return false
+                }
             }
             return true
         }
