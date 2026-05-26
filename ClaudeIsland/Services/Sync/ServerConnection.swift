@@ -52,12 +52,58 @@ final class ServerConnection: ObservableObject {
     /// Called when an iPhone requests a remote session launch. Payload: (presetId, projectPath, requestedByDeviceId).
     var onSessionLaunch: ((String, String, String) -> Void)?
 
+    /// Called when the server pushes a `subscription-updated` event for
+    /// THIS Mac. Server's emit fires after redeem-code, IAP renewal,
+    /// admin grant, or any other state change. Mac uses this for live
+    /// banner refresh without polling.
+    /// Pre-server-F3: this event only goes to paired iPhones, never to
+    /// the Mac itself, so this handler stays silent. Post-F3: Mac is in
+    /// the recipient list and the banner auto-updates.
+    var onSubscriptionUpdated: ((SubscriptionState) -> Void)?
+
     var isConnected: Bool { state == .connected }
 
     init(serverUrl: String, keyManager: KeyManager = KeyManager(serviceName: "com.codeisland.keys")) {
         self.serverUrl = serverUrl
         self.keyManager = keyManager
         self.token = keyManager.loadToken(forServer: serverUrl)
+    }
+
+    // MARK: - Client version gate (cross-platform contract)
+
+    /// Header value advertising this client's platform + semver. The
+    /// server uses it for Phase 1 observation (version distribution) and
+    /// Phase 2 enforcement (HTTP 426 on too-old clients).
+    ///
+    /// Pre-release suffixes are stripped (e.g. "2.4.0-tf1" -> "mac/2.4.0")
+    /// so TestFlight / debug builds aren't accidentally classified as
+    /// older than their underlying release version.
+    static let clientVersionHeaderValue: String = {
+        let raw = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        let base = raw.split(separator: "-").first.map(String.init) ?? raw
+        return "mac/\(base)"
+    }()
+
+    /// Apply the `X-Client-Version` header to every outbound URLRequest.
+    /// Called from a single helper so we can't forget on new endpoints.
+    private func addClientHeaders(to request: inout URLRequest) {
+        request.setValue(Self.clientVersionHeaderValue, forHTTPHeaderField: "X-Client-Version")
+    }
+
+    /// Intercept HTTP 426 client_too_old before any endpoint-specific
+    /// body parsing. The alert pops once per cooldown window (handled by
+    /// UpgradeRequiredCoordinator), then RedeemError.clientTooOld is
+    /// thrown so callers stop their flow (no retry, no body parse, no
+    /// fallback path). Non-426 responses pass through untouched.
+    private func check426(_ data: Data, _ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse, http.statusCode == 426 else { return }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard (json?["error"] as? String) == "client_too_old" else { return }
+        let downloadUrl = (json?["downloadUrl"] as? String) ?? "https://miomioos.github.io/MioIsland/"
+        let message = json?["message"] as? String
+        UpgradeRequiredCoordinator.shared.show(downloadUrl: downloadUrl, serverMessage: message)
+        Self.logger.warning("Server returned 426 client_too_old — clientVersion=\(Self.clientVersionHeaderValue, privacy: .public)")
+        throw RedeemError.clientTooOld
     }
 
     // MARK: - Authentication
@@ -82,9 +128,12 @@ final class ServerConnection: ObservableObject {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addClientHeaders(to: &urlRequest)
         urlRequest.httpBody = try JSONEncoder().encode(request)
 
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
+
+        try check426(data, response)
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             state = .error("Auth failed")
@@ -126,7 +175,10 @@ final class ServerConnection: ObservableObject {
             .reconnectWaitMax(30),
             .randomizationFactor(0.5),
             .forceWebsockets(true),
-            .extraHeaders(["Authorization": "Bearer \(token)"]),
+            .extraHeaders([
+                "Authorization": "Bearer \(token)",
+                "X-Client-Version": Self.clientVersionHeaderValue,
+            ]),
         ])
 
         socket = manager?.defaultSocket
@@ -215,6 +267,22 @@ final class ServerConnection: ObservableObject {
             }
         }
 
+        // Subscription state changed (redeem, IAP renewal, admin grant).
+        // Server F3 routes the event to Mac itself in addition to paired
+        // iPhones; without F3 this handler stays silent which is safe.
+        // Payload shape: {status, expiresAt?, daysLeft?, source?}
+        socket?.on("subscription-updated") { [weak self] data, _ in
+            guard let dict = data.first as? [String: Any] else { return }
+            guard let state = SubscriptionState(serverPayload: dict) else {
+                Self.logger.warning("subscription-updated: malformed payload, ignoring")
+                return
+            }
+            Task { @MainActor in
+                Self.logger.info("subscription-updated: status=\(state.status.rawValue, privacy: .public) daysLeft=\(state.daysLeft ?? -1)")
+                self?.onSubscriptionUpdated?(state)
+            }
+        }
+
         socket?.connect()
     }
 
@@ -263,8 +331,10 @@ final class ServerConnection: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        addClientHeaders(to: &request)
         request.httpBody = data
-        _ = try? await URLSession.shared.data(for: request)
+        guard let (respData, resp) = try? await URLSession.shared.data(for: request) else { return }
+        try? check426(respData, resp)
     }
 
     /// Download a blob by ID. Returns (data, mime) or throws.
@@ -272,7 +342,9 @@ final class ServerConnection: ObservableObject {
         guard let token else { throw URLError(.userAuthenticationRequired) }
         var request = URLRequest(url: URL(string: "\(serverUrl)/v1/blobs/\(blobId)")!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        addClientHeaders(to: &request)
         let (data, response) = try await URLSession.shared.data(for: request)
+        try check426(data, response)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw NSError(domain: "CodeIsland.Blob", code: (response as? HTTPURLResponse)?.statusCode ?? -1,
                           userInfo: [NSLocalizedDescriptionKey: "Blob download failed"])
@@ -312,9 +384,11 @@ final class ServerConnection: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        addClientHeaders(to: &request)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try check426(data, response)
         return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
@@ -324,15 +398,19 @@ final class ServerConnection: ObservableObject {
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        addClientHeaders(to: &request)
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        _ = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try check426(data, response)
     }
 
     private func getJSON(path: String) async throws -> [String: Any] {
         let url = URL(string: "\(serverUrl)\(path)")!
         var request = URLRequest(url: url)
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, _) = try await URLSession.shared.data(for: request)
+        addClientHeaders(to: &request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try check426(data, response)
         return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
@@ -341,7 +419,9 @@ final class ServerConnection: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (_, response) = try await URLSession.shared.data(for: request)
+        addClientHeaders(to: &request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try check426(data, response)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw URLError(.badServerResponse)
         }
@@ -399,7 +479,9 @@ final class ServerConnection: ObservableObject {
             let url = URL(string: "\(serverUrl)/v1/pairing/links")!
             var request = URLRequest(url: url)
             if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-            let (data, _) = try await URLSession.shared.data(for: request)
+            addClientHeaders(to: &request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try check426(data, response)
             guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
             return array.compactMap { dict in
                 guard let id = dict["deviceId"] as? String,
@@ -419,4 +501,144 @@ final class ServerConnection: ObservableObject {
         try await deleteRequest(path: "/v1/pairing/links/\(deviceId)")
         Self.logger.info("Unlinked device \(deviceId)")
     }
+
+    // MARK: - Redeem code (trial activation)
+
+    /// Activate a trial code on this Mac. The Mac becomes the redemption
+    /// point (Apple Guideline 3.1.1 forced this off iOS); paired iPhones
+    /// inherit the trial via DeviceLink + the server's
+    /// `subscription-updated` socket event.
+    ///
+    /// Server contract:
+    ///   - 200: { "success": true, "durationDays": N, "expiresAt": ISO8601 }
+    ///   - 4xx: { "error": "<machine-key>", "message": "<human>" }
+    ///
+    /// The HTTP status is intentionally ignored — we branch on `body.error`
+    /// since the server may collapse all errors to 400 while keeping the
+    /// shape stable. Falls back to `.serverError` on unknown error keys.
+    func redeemPairingCode(_ code: String) async throws -> RedemptionRecord {
+        guard let token, !token.isEmpty else {
+            throw RedeemError.unauthorized
+        }
+        // Defensive: the serverUrl is validated on input by isValidDraft
+        // in PairPhoneView, but a force-unwrap here would crash the app
+        // on any malformed config that slipped through. Map to .network
+        // so the user gets the directional "check your connection" hint.
+        guard let url = URL(string: "\(serverUrl)/v1/pairing/redeem-code") else {
+            Self.logger.error("redeemPairingCode: malformed serverUrl=\(self.serverUrl, privacy: .public)")
+            throw RedeemError.network
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        addClientHeaders(to: &request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
+        request.timeoutInterval = 15
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            Self.logger.error("redeemPairingCode network error: \(error.localizedDescription)")
+            throw RedeemError.network
+        }
+
+        try check426(data, response)
+
+        let body = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+
+        if (body["success"] as? Bool) == true,
+           let durationDays = body["durationDays"] as? Int,
+           let expiresAtRaw = body["expiresAt"] as? String,
+           let expiresAt = Self.parseISO8601(expiresAtRaw) {
+            Self.logger.info("Redeem ok: \(durationDays)d, expires \(expiresAtRaw, privacy: .public)")
+            return RedemptionRecord(
+                code: code,
+                durationDays: durationDays,
+                redeemedAt: Date(),
+                expiresAt: expiresAt
+            )
+        }
+
+        if let errorKey = body["error"] as? String {
+            let mapped = RedeemError(serverErrorKey: errorKey)
+            Self.logger.warning("Redeem failed: \(errorKey, privacy: .public)")
+            throw mapped
+        }
+
+        Self.logger.error("Redeem response malformed: \(String(data: data, encoding: .utf8)?.prefix(200) ?? "<binary>", privacy: .public)")
+        throw RedeemError.malformedResponse
+    }
+
+    // MARK: - Subscription state (read-only fetch)
+
+    /// Fetch current subscription state for THIS device from the server.
+    /// Endpoint: GET /v1/subscription/status (existing — also used by
+    /// iPhone via AppState.refreshSubscriptionStatus). Returns nil when
+    /// the response can't parse — caller should keep its previous state
+    /// rather than wiping the banner on a transient malformation.
+    ///
+    /// Pre-server-F4: Mac calling this gets short-circuited to
+    /// {status:'none', reason:'mac_device'} because checkAccess returns
+    /// early on Mac. SyncManager handles that gracefully by keeping any
+    /// recent local lastRedemption visible.
+    /// Post-F4: server includes Mac's own trialExpiresAt in the response.
+    func fetchSubscription() async throws -> SubscriptionState? {
+        guard let token, !token.isEmpty else {
+            throw RedeemError.unauthorized
+        }
+        guard let url = URL(string: "\(serverUrl)/v1/subscription/status") else {
+            throw RedeemError.network
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        addClientHeaders(to: &request)
+        request.timeoutInterval = 10
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            Self.logger.error("fetchSubscription network error: \(error.localizedDescription)")
+            throw RedeemError.network
+        }
+
+        try check426(data, response)
+
+        guard let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            Self.logger.warning("fetchSubscription: non-JSON response, ignoring")
+            return nil
+        }
+        let state = SubscriptionState(serverPayload: body)
+        if state == nil {
+            Self.logger.warning("fetchSubscription: unrecognised payload \(String(data: data, encoding: .utf8)?.prefix(200) ?? "<binary>", privacy: .public)")
+        } else {
+            Self.logger.info("fetchSubscription ok: status=\(state!.status.rawValue, privacy: .public) daysLeft=\(state!.daysLeft ?? -1)")
+        }
+        return state
+    }
+
+    /// Try ISO8601 with fractional seconds first (`.withFractionalSeconds`
+    /// accepts ANY milliseconds value, e.g. `.000Z`, `.514Z`, `.999Z` —
+    /// not just `.000`). Falls back to plain (no fractional) for
+    /// forward-compat if the server ever drops the fractional part.
+    private static func parseISO8601(_ raw: String) -> Date? {
+        if let d = iso8601Fractional.date(from: raw) { return d }
+        return iso8601Plain.date(from: raw)
+    }
+
+    private static let iso8601Fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let iso8601Plain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
 }

@@ -67,7 +67,7 @@ struct NotchView: View {
 
     /// Whether any Claude session is waiting for a question answer
     private var hasWaitingForQuestion: Bool {
-        sessionMonitor.instances.contains { $0.phase.isWaitingForQuestion }
+        visibleInstances.contains { $0.phase.isWaitingForQuestion }
     }
 
     /// Whether there are any active (non-ended) sessions
@@ -600,7 +600,7 @@ struct NotchView: View {
             // If a session is waiting for a question, auto-show the question UI
             // (handles the case where user closed notch accidentally and reopened)
             if case .instances = viewModel.contentType,
-               let questionSession = sessionMonitor.instances.first(where: { $0.phase.isWaitingForQuestion }) {
+               let questionSession = visibleInstances.first(where: { $0.phase.isWaitingForQuestion }) {
                 viewModel.showQuestion(for: questionSession)
             }
         case .closed:
@@ -686,49 +686,15 @@ struct NotchView: View {
                     }
                 }
 
-            // Trigger bounce animation to get user's attention
-            DispatchQueue.main.async {
-                isBouncing = true
-                // Bounce back after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    isBouncing = false
-                }
-            }
-
-            // Auto-popup: if a session transitioned FROM processing/compacting TO waitingForInput,
-            // expand the notch and show that session's chat after a 1-second delay
-            let sessionsFromWorkingState = newlyWaitingSessions.filter { session in
-                guard let prevPhase = previousPhases[session.stableId] else { return false }
-                return prevPhase == .processing || prevPhase == .compacting
-            }
-
-            let autoExpandOnComplete = UserDefaults.standard.object(forKey: "autoExpandOnComplete") as? Bool ?? true
-            if autoExpandOnComplete && !sessionsFromWorkingState.isEmpty && viewModel.status == .closed {
-                let completedSession = sessionsFromWorkingState[0]
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [self] in
-                    guard viewModel.status == .closed else { return }
-                    guard visibleInstances.contains(where: {
-                        $0.stableId == completedSession.stableId && $0.phase == .waitingForInput
-                    }) else { return }
-
-                    // Suppress if the session's terminal is frontmost
-                    let isFront = TerminalVisibilityDetector.isSessionTerminalFrontmost(completedSession)
-                    DebugLogger.log("Suppress", "session=\(completedSession.projectName) isFront=\(isFront) termApp=\(completedSession.terminalApp ?? "nil")")
-                    if isFront {
-                        DebugLogger.log("Suppress", "Suppressed — user is looking at terminal")
-                        return
-                    }
-
-                    DebugLogger.log("Suppress", "Opening notification popup")
-                    viewModel.notchOpen(reason: .notification)
-                    if let currentSession = visibleInstances.first(where: {
-                        $0.stableId == completedSession.stableId
-                    }) {
-                        viewModel.showChat(for: currentSession)
+                // Trigger bounce animation to get user's attention
+                DispatchQueue.main.async {
+                    isBouncing = true
+                    // Bounce back after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        isBouncing = false
                     }
                 }
             }
-        }
 
             // Schedule hiding the checkmark after 30 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [self] in
@@ -1358,14 +1324,24 @@ private struct QuestionContentWrapper: View {
     let session: SessionState
     @ObservedObject var sessionMonitor: SessionMonitor
     @ObservedObject var viewModel: NotchViewModel
+    /// Tool-use IDs the user explicitly dismissed via the AskUserQuestion
+    /// header X. Lets the user say "I'll deal with this later" without
+    /// sending Enter / ↓+Enter to the CLI (Submit / Cancel both commit a
+    /// real answer). A fresh question with a different toolUseId
+    /// re-pops the panel automatically — this isn't a permanent mute.
+    @State private var dismissedQuestionToolUseIds: Set<String> = []
 
     var body: some View {
         let liveSession = sessionMonitor.instances.first(where: { $0.sessionId == session.sessionId }) ?? session
-        if let ctx = Self.questionContext(for: liveSession) {
+        if let ctx = Self.questionContext(for: liveSession),
+           !dismissedQuestionToolUseIds.contains(ctx.toolUseId) {
             AskUserQuestionView(
                 session: liveSession,
                 context: ctx,
-                sessionMonitor: sessionMonitor
+                sessionMonitor: sessionMonitor,
+                onDismiss: {
+                    dismissedQuestionToolUseIds.insert(ctx.toolUseId)
+                }
             )
         } else {
             ClaudeInstancesView(
